@@ -6,7 +6,8 @@
       "Bash(npm run build:*)",
       "Bash(python3:*)",
       "Bash(npm run clear:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(git rm:*)"
     ]
   }
 }
