@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     NEON_DATABASE_URL: str
     OPENAI_API_KEY: str = ""
     HF_API_KEY: str = ""
-    CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    CORS_ORIGINS: List[str] = ["*"]
 
     class Config:
         env_file = ".env"
