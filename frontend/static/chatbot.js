@@ -1,5 +1,5 @@
 (function() {
-  const API_URL = 'http://127.0.0.1:8000/api/chat';
+  const API_URL = 'https://misbah-asghar-texbook-backend.hf.space/api/chat';
 
   const styles = `
     #chatbot-button {
