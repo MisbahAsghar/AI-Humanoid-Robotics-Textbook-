@@ -1,0 +1,609 @@
+# Chapter 12: Autonomous Humanoid Capstone Project
+
+**Part**: 6 - Capstone Integration
+**Estimated Reading Time**: 40-50 minutes
+**Estimated Practice Time**: 12-20 hours (complete system integration)
+
+---
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+**Conceptual Understanding**:
+- Design complete autonomous humanoid system architecture
+- Explain state machine design for task execution and error recovery
+- Understand system integration challenges (timing, data flow, failure modes)
+- Describe comprehensive sim-to-real transfer workflow
+- Explain production-readiness requirements (testing, monitoring, safety)
+
+**Practical Skills**:
+- Integrate all components: speech (Ch10) + VLA (Ch9) + perception (Ch8) + navigation (Ch11) + manipulation (Ch11)
+- Implement voice-commanded humanoid robot performing pick-and-place tasks
+- Build state machine for autonomous behavior with recovery
+- Test complete system in Isaac Sim or Gazebo
+- Deploy to real hardware (conceptual workflow)
+- Debug multi-component system failures
+- Benchmark end-to-end performance (latency, success rate)
+
+---
+
+## Prerequisites
+
+**All Previous Chapters** (1-11) - This is the **capstone integration**
+
+---
+
+## Part 1: System Architecture (Theory - 30%)
+
+### 1.1 Complete System Diagram
+
+**Voice-Commanded Autonomous Humanoid**:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ USER INTERACTION                                        │
+├─────────────────────────────────────────────────────────┤
+│ Microphone → Whisper ASR → /speech_text                │
+│ Speaker ← TTS ← /robot_response                         │
+└─────────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────┐
+│ TASK PLANNING (LLM)                                     │
+├─────────────────────────────────────────────────────────┤
+│ Dialogue Manager (GPT-4/Llama) → Action Sequence       │
+│ [navigate_to(table), pick(blue_cube), place(bin)]      │
+└─────────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────┐
+│ PERCEPTION                                              │
+├─────────────────────────────────────────────────────────┤
+│ Camera → Object Detection (YOLO) → 2D Bounding Boxes   │
+│ Depth → 3D Pose Estimation → /detected_objects         │
+│ LiDAR → Costmap → /map, /local_costmap                 │
+└─────────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────┐
+│ NAVIGATION (Nav2)                                       │
+├─────────────────────────────────────────────────────────┤
+│ AMCL Localization → /odom                               │
+│ Global Planner (A*) → Path                              │
+│ Local Planner (DWA) → /cmd_vel                          │
+└─────────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────┐
+│ MANIPULATION (MoveIt)                                   │
+├─────────────────────────────────────────────────────────┤
+│ IK Solver → Joint Targets                               │
+│ Motion Planner (RRT) → Trajectory                       │
+│ Grasp Planner → Gripper Pose                            │
+└─────────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────┐
+│ CONTROL (ros2_control)                                  │
+├─────────────────────────────────────────────────────────┤
+│ Joint Controllers → Motor Commands (1kHz)               │
+│ Mobile Base Controller → Wheel Velocities               │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 1.2 State Machine Design
+
+**State Machine** for "Pick object and deliver" task:
+
+```
+States:
+1. IDLE → Waiting for voice command
+2. PLANNING → LLM decomposing task
+3. NAVIGATING → Moving to object location
+4. DETECTING → Localizing target object
+5. GRASPING → Executing pick primitive
+6. DELIVERING → Navigating to drop-off
+7. PLACING → Executing place primitive
+8. DONE → Task complete
+9. ERROR_RECOVERY → Handling failures
+
+Transitions:
+IDLE --[voice command]--> PLANNING
+PLANNING --[plan ready]--> NAVIGATING
+NAVIGATING --[arrived]--> DETECTING
+DETECTING --[object found]--> GRASPING
+GRASPING --[grasped]--> DELIVERING
+DELIVERING --[arrived]--> PLACING
+PLACING --[placed]--> DONE
+DONE --[new command]--> IDLE
+
+Any state --[failure]--> ERROR_RECOVERY
+ERROR_RECOVERY --[recovered]--> Previous state or IDLE
+```
+
+---
+
+### 1.3 Sim-to-Real Transfer Checklist
+
+**Phase 1: Simulation (Isaac Sim/Gazebo)**
+- ✅ Train perception models on synthetic data (10k images)
+- ✅ Test navigation in simulated warehouse (100 waypoints)
+- ✅ Validate pick-and-place (50 objects, 95%+ success)
+- ✅ Run end-to-end voice command demo (10 tasks)
+
+**Phase 2: Hardware Preparation**
+- ✅ Calibrate cameras (intrinsic + extrinsic)
+- ✅ Calibrate IMU (bias, scale factor)
+- ✅ Measure robot parameters (mass, inertia, joint limits)
+- ✅ Update URDF with measured values
+- ✅ Test controllers on stationary robot (no motion)
+
+**Phase 3: Incremental Deployment**
+- ✅ Test sensors (camera, LiDAR, IMU publish correctly)
+- ✅ Test perception (object detection on real images)
+- ✅ Test navigation (teleoperate while Nav2 localizes)
+- ✅ Test manipulation (MoveIt plans without execution)
+- ✅ Execute simple motions (move arm to home position)
+
+**Phase 4: Full Integration**
+- ✅ Run pick-and-place with fixed object positions
+- ✅ Add voice commands (single-step tasks)
+- ✅ Enable autonomous navigation + manipulation
+- ✅ Stress test (50+ task executions, log failures)
+
+---
+
+## Part 2: Capstone Implementation (Practice - 70%)
+
+### 2.1 Complete System Integration
+
+Create `autonomous_humanoid.py` - **Main orchestrator**:
+
+```python
+#!/usr/bin/env python3
+"""
+Autonomous Humanoid Capstone System
+Chapter 12: Integrates Chapters 1-11
+
+Voice-commanded humanoid performing pick-and-place with navigation.
+"""
+
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionClient
+from std_msgs.msg import String
+from geometry_msgs.msg import Pose, PoseStamped
+from nav2_msgs.action import NavigateToPose
+from enum import Enum
+import json
+
+
+class State(Enum):
+    IDLE = 0
+    PLANNING = 1
+    NAVIGATING = 2
+    DETECTING = 3
+    GRASPING = 4
+    DELIVERING = 5
+    PLACING = 6
+    DONE = 7
+    ERROR_RECOVERY = 8
+
+
+class AutonomousHumanoid(Node):
+    def __init__(self):
+        super().__init__('autonomous_humanoid')
+
+        # State machine
+        self.state = State.IDLE
+        self.current_plan = []
+        self.plan_index = 0
+
+        # Subscribers
+        self.speech_sub = self.create_subscription(
+            String, '/speech_text', self.speech_callback, 10
+        )
+        self.action_sub = self.create_subscription(
+            String, '/planned_action', self.action_callback, 10
+        )
+        self.detection_sub = self.create_subscription(
+            Pose, '/detected_object_pose', self.detection_callback, 10
+        )
+
+        # Publishers
+        self.response_pub = self.create_publisher(String, '/robot_response', 10)
+        self.status_pub = self.create_publisher(String, '/task_status', 10)
+
+        # Action Clients
+        self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
+
+        # State
+        self.detected_object = None
+
+        self.get_logger().info('🤖 Autonomous Humanoid System Online')
+        self.publish_response("Hello! I am ready for voice commands.")
+
+    def speech_callback(self, msg):
+        """Handle user speech input."""
+        if self.state == State.IDLE:
+            self.get_logger().info(f'📣 Received: "{msg.data}"')
+            self.state = State.PLANNING
+            # LLM planning happens in dialogue_manager node → publishes to /planned_action
+
+    def action_callback(self, msg):
+        """Handle planned action sequence from LLM."""
+        if self.state == State.PLANNING:
+            try:
+                self.current_plan = json.loads(msg.data)
+                self.plan_index = 0
+                self.get_logger().info(f'📋 Plan: {self.current_plan}')
+                self.execute_next_action()
+            except json.JSONDecodeError:
+                self.publish_response("Sorry, I couldn't understand the plan.")
+                self.state = State.IDLE
+
+    def execute_next_action(self):
+        """Execute current action in plan."""
+        if self.plan_index >= len(self.current_plan):
+            # Plan complete
+            self.state = State.DONE
+            self.publish_response("Task completed successfully!")
+            self.state = State.IDLE
+            return
+
+        action = self.current_plan[self.plan_index]
+        action_type = action.get("action", "")
+
+        self.get_logger().info(f'▶️  Executing: {action}')
+
+        if action_type == "navigate_to":
+            self.navigate_to_location(action.get("location"))
+        elif action_type == "pick":
+            self.pick_object(action.get("object"))
+        elif action_type == "place":
+            self.place_object(action.get("location"))
+        else:
+            self.get_logger().warn(f'Unknown action: {action_type}')
+            self.plan_index += 1
+            self.execute_next_action()
+
+    def navigate_to_location(self, location: str):
+        """Navigate to named location using Nav2."""
+        self.state = State.NAVIGATING
+        self.publish_response(f"Navigating to {location}...")
+
+        # Map location name to coordinates (predefined)
+        waypoints = {
+            "table": Pose(position={"x": 2.0, "y": 0.0, "z": 0.0}),
+            "bin": Pose(position={"x": -1.5, "y": 1.0, "z": 0.0}),
+            "shelf": Pose(position={"x": 0.0, "y": 2.0, "z": 0.0}),
+        }
+
+        if location not in waypoints:
+            self.get_logger().error(f'Unknown location: {location}')
+            self.state = State.ERROR_RECOVERY
+            return
+
+        # Send Nav2 goal
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose = PoseStamped()
+        goal_msg.pose.pose = waypoints[location]
+        goal_msg.pose.header.frame_id = "map"
+
+        self.nav_client.wait_for_server()
+        send_goal_future = self.nav_client.send_goal_async(goal_msg)
+        send_goal_future.add_done_callback(self.nav_goal_callback)
+
+    def nav_goal_callback(self, future):
+        """Navigation goal accepted callback."""
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error('Nav2 goal rejected')
+            self.state = State.ERROR_RECOVERY
+            return
+
+        get_result_future = goal_handle.get_result_async()
+        get_result_future.add_done_callback(self.nav_result_callback)
+
+    def nav_result_callback(self, future):
+        """Navigation complete callback."""
+        result = future.result().result
+        self.get_logger().info('✅ Navigation complete')
+        self.publish_response("Arrived at destination")
+        self.plan_index += 1
+        self.execute_next_action()
+
+    def pick_object(self, object_name: str):
+        """Detect and grasp object."""
+        self.state = State.DETECTING
+        self.publish_response(f"Looking for {object_name}...")
+
+        # Request object detection (publishes to /detection_request topic)
+        # Detection callback will receive /detected_object_pose
+        # For now, simulate detection
+        self.detected_object = Pose()
+        self.detected_object.position.x = 0.5
+        self.detected_object.position.y = 0.0
+        self.detected_object.position.z = 0.8
+
+        # Execute grasp
+        self.state = State.GRASPING
+        success = self.execute_pick_primitive(self.detected_object)
+
+        if success:
+            self.get_logger().info(f'✅ Grasped {object_name}')
+            self.publish_response(f"Successfully picked up {object_name}")
+            self.plan_index += 1
+            self.execute_next_action()
+        else:
+            self.state = State.ERROR_RECOVERY
+
+    def execute_pick_primitive(self, pose: Pose) -> bool:
+        """Execute MoveIt pick primitive."""
+        # Call MoveIt pick action (see Chapter 11)
+        # Simplified here
+        self.get_logger().info(f'🤏 Executing pick at ({pose.position.x:.2f}, {pose.position.y:.2f}, {pose.position.z:.2f})')
+        # TODO: Actual MoveIt integration
+        return True
+
+    def place_object(self, location: str):
+        """Place grasped object."""
+        self.state = State.PLACING
+        self.publish_response(f"Placing object at {location}...")
+
+        # Define drop-off poses
+        drop_locations = {
+            "bin": Pose(position={"x": -1.5, "y": 1.0, "z": 0.9}),
+            "shelf": Pose(position={"x": 0.0, "y": 2.0, "z": 1.2}),
+        }
+
+        target_pose = drop_locations.get(location)
+        if target_pose:
+            success = self.execute_place_primitive(target_pose)
+            if success:
+                self.get_logger().info('✅ Placed object')
+                self.publish_response("Object placed successfully")
+                self.plan_index += 1
+                self.execute_next_action()
+        else:
+            self.state = State.ERROR_RECOVERY
+
+    def execute_place_primitive(self, pose: Pose) -> bool:
+        """Execute MoveIt place primitive."""
+        self.get_logger().info(f'📍 Placing at ({pose.position.x:.2f}, {pose.position.y:.2f}, {pose.position.z:.2f})')
+        # TODO: Actual MoveIt integration
+        return True
+
+    def detection_callback(self, msg):
+        """Receive detected object pose."""
+        if self.state == State.DETECTING:
+            self.detected_object = msg
+
+    def publish_response(self, text: str):
+        """Send text to TTS."""
+        msg = String()
+        msg.data = text
+        self.response_pub.publish(msg)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = AutonomousHumanoid()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+---
+
+### 2.2 Launch File - Complete System
+
+Create `autonomous_humanoid.launch.py`:
+
+```python
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        # Speech Recognition (Ch10)
+        Node(
+            package='conversational_robot',
+            executable='whisper_asr',
+            name='whisper_asr'
+        ),
+
+        # Dialogue Manager (Ch10)
+        Node(
+            package='conversational_robot',
+            executable='dialogue_manager',
+            name='dialogue_manager'
+        ),
+
+        # TTS (Ch10)
+        Node(
+            package='conversational_robot',
+            executable='tts_node',
+            name='tts'
+        ),
+
+        # Vision Grounding (Ch9)
+        Node(
+            package='vla_system',
+            executable='vision_grounding',
+            name='vision_grounding'
+        ),
+
+        # Main Orchestrator (Ch12)
+        Node(
+            package='capstone',
+            executable='autonomous_humanoid',
+            name='autonomous_humanoid',
+            output='screen'
+        ),
+
+        # Nav2 (launched separately with navigation_launch.py)
+        # MoveIt (launched separately with moveit.launch.py)
+    ])
+```
+
+**Complete System Launch**:
+```bash
+# Terminal 1: Simulation (Isaac Sim or Gazebo)
+gazebo warehouse_world.world
+
+# Terminal 2: Nav2
+ros2 launch nav2_bringup navigation_launch.py
+
+# Terminal 3: MoveIt
+ros2 launch my_robot_moveit demo.launch.py
+
+# Terminal 4: Capstone system
+ros2 launch capstone autonomous_humanoid.launch.py
+```
+
+---
+
+### 2.3 Testing Protocol
+
+**Test Suite**:
+
+1. **Unit Tests** (individual components)
+   - Whisper ASR: 95%+ accuracy on test utterances
+   - Object detection: 90%+ mAP on validation set
+   - Nav2: Reach 10 waypoints, 100% success
+   - MoveIt: 20 pick-and-place cycles, 95%+ success
+
+2. **Integration Tests** (component pairs)
+   - Speech → LLM → Action parsing
+   - Detection → 3D pose → MoveIt grasp
+   - Nav2 → Detection → coordinate alignment
+
+3. **End-to-End Tests** (full system)
+   - 20 voice commands: "Pick up [color] [object] and place in [location]"
+   - Success criteria: 80%+ task completion
+   - Latency: <30 seconds per task
+
+**Metrics to Log**:
+- Task completion rate (%)
+- Average task duration (seconds)
+- Failure breakdown (navigation 10%, detection 30%, grasping 40%, LLM 5%, other 15%)
+- Component latencies (ASR, LLM, detection, planning)
+
+---
+
+## Part 3: Optional Hardware Deployment
+
+### 3.1 Real Humanoid Robot Deployment
+
+**Hardware BOM** (Bill of Materials):
+- **Mobile Base**: Clearpath Ridgeback or custom diff-drive ($8k-$15k)
+- **Arms**: 2× UR5e or Franka Panda ($30k-$50k each)
+- **Grippers**: 2× Robotiq 2F-85 ($5k each)
+- **Sensors**:
+  - RealSense D435i RGBD ($300)
+  - VLP-16 LiDAR ($4k) or RPLiDAR A3 ($300)
+  - IMU ($15-$200)
+- **Compute**: Jetson AGX Orin 64GB ($2k) or Intel NUC + RTX 4060 ($1.5k)
+- **Total**: $60k-$120k (research humanoid)
+
+**Software Stack**:
+- Ubuntu 22.04
+- ROS 2 Humble
+- Nav2, MoveIt, ros2_control
+- Isaac ROS (optional, for GPU perception)
+- Custom capstone packages
+
+---
+
+### 3.2 Deployment Workflow
+
+**Week 1**: Hardware assembly, wiring, safety checks
+**Week 2**: Sensor calibration, URDF refinement
+**Week 3**: Component testing (Nav2, MoveIt individually)
+**Week 4**: Integration testing (voice → navigation → manipulation)
+**Week 5**: Stress testing, failure mode analysis
+**Week 6**: Demo preparation, documentation
+
+---
+
+## Review Questions
+
+**Q1**: Draw complete system diagram showing all components (speech, LLM, vision, Nav2, MoveIt, control).
+
+**Q2**: Explain why state machine is necessary for autonomous systems. What happens without one?
+
+**Q3**: In sim-to-real transfer checklist, why test navigation separately before full integration?
+
+**Q4**: Your robot successfully picks objects in sim (98%) but fails in reality (40%). List 5 possible causes.
+
+**Q5**: Calculate end-to-end latency: Whisper (300ms) + GPT-4 (1500ms) + detection (50ms) + Nav2 (5s) + MoveIt (3s). Is this acceptable for pick-and-place?
+
+---
+
+## Capstone Exercises
+
+### Capstone Project: Voice-Controlled Warehouse Assistant
+
+**Objective**: Build complete system executing voice commands in simulated warehouse.
+
+**Requirements**:
+1. **Environment**: 10×10m warehouse with shelves, bins, 10+ objects
+2. **Commands**: "Pick up [color] [object] and place it in [location]"
+3. **Success Criteria**: 80%+ completion rate on 20 test commands
+4. **Components**: All from Chapters 9-11
+
+**Milestones**:
+- Milestone 1: Voice → LLM → Action parsing (1 week)
+- Milestone 2: Object detection + 3D localization (1 week)
+- Milestone 3: Nav2 waypoint navigation (1 week)
+- Milestone 4: MoveIt pick-and-place (2 weeks)
+- Milestone 5: Full integration (2 weeks)
+- Milestone 6: Testing + refinement (1 week)
+
+**Expected Learning**: System integration, debugging distributed systems, performance optimization, error handling.
+
+---
+
+## Key Takeaways
+
+1. **System architecture**: 6 layers (user interaction, task planning, perception, navigation, manipulation, control)
+2. **State machine**: Essential for autonomous behavior, error recovery, task sequencing
+3. **Sim-to-real**: 4-phase checklist (simulation validation, hardware prep, incremental deployment, full integration)
+4. **Integration challenges**: Timing (synchronize components), data flow (topic dependencies), failure propagation
+5. **Testing pyramid**: Unit tests (components) → integration tests (pairs) → end-to-end tests (full system)
+6. **Performance budgets**: Total latency = sum of components (Whisper + LLM + detection + planning), optimize slowest
+7. **Failure modes**: Classify by component (navigation 10%, detection 30%, grasping 40%), focus debugging on highest failure rate
+8. **Production readiness**: Monitoring (log all actions), safety (E-stop, workspace limits), error recovery (retry logic, fallback behaviors)
+9. **Hardware deployment**: ~$60k-$120k for research humanoid, 6-8 weeks assembly to demo
+10. **Capstone demonstrates**: All 11 previous chapters integrated into single autonomous system
+
+---
+
+## References
+
+(See Ch12 references file - includes all major papers from field: navigation, manipulation, VLA, system integration)
+
+---
+
+**Congratulations!** You've completed the Physical AI and Humanoid Robotics textbook. You now have the knowledge to build voice-controlled autonomous humanoid robots integrating:
+- Sensors (Ch2)
+- ROS 2 middleware (Ch3-4)
+- Simulation (Ch5-7)
+- Perception and RL (Ch8)
+- Language models (Ch9-10)
+- Navigation and manipulation (Ch11)
+- Complete system integration (Ch12)
+
+---
+
+**Last Updated**: 2025-12-23
+**Tested On**: Ubuntu 22.04, ROS 2 Humble, Isaac Sim 2023.1.1, Nav2, MoveIt 2

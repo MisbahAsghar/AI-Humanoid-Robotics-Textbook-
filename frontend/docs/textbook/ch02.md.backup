@@ -1,0 +1,1637 @@
+# Chapter 2: Humanoid Sensor Systems
+
+**Part**: 1 - Foundations of Physical AI
+**Estimated Reading Time**: 50-60 minutes
+**Estimated Practice Time**: 3-4 hours (including exercises)
+
+---
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+**Conceptual Understanding**:
+- Identify and explain the function of five major sensor types used in humanoid robots
+- Describe key sensor characteristics (FOV, resolution, range, noise properties)
+- Explain the concept of sensor fusion and why it's necessary in robotics
+- Understand coordinate frames and spatial transformations for sensors
+
+**Practical Skills**:
+- Read and process RGB camera data using OpenCV in Python
+- Visualize 3D point cloud data from depth sensors and LiDAR
+- Interpret IMU (Inertial Measurement Unit) data for orientation estimation
+- Implement basic sensor calibration and noise filtering techniques
+
+---
+
+## Prerequisites
+
+**Conceptual Prerequisites**:
+- Chapter 1: Introduction to Physical AI (sensor noise concepts, reality gap)
+- Basic understanding of coordinate systems (Cartesian, spherical)
+- Familiarity with Python programming
+
+**Technical Setup Prerequisites**:
+- Python 3.8+ installed
+- Libraries: `numpy`, `matplotlib`, `opencv-python`, `open3d` (installation instructions below)
+- 4GB RAM minimum (8GB recommended for point cloud processing)
+- Optional: USB webcam for real-time camera examples
+
+---
+
+## Part 1: Conceptual Foundations (Theory)
+
+### 1.1 Sensor Types for Humanoid Robots
+
+Humanoid robots require rich sensory input to perceive and interact with the world. Unlike traditional robots operating in structured factory environments, humanoids must navigate dynamic, unstructured spaces—meaning they need diverse, redundant sensors to build a reliable understanding of their surroundings.
+
+#### 1.1.1 RGB Cameras (Vision Sensors)
+
+**Function**: Capture 2D color images of the environment, enabling object recognition, scene understanding, and visual navigation.
+
+**Technology**: Most humanoid robots use CMOS (Complementary Metal-Oxide-Semiconductor) or CCD (Charge-Coupled Device) image sensors. Modern systems favor CMOS for lower power consumption and faster frame rates.
+
+**Key Specifications**:
+- **Resolution**: 640×480 (VGA) to 1920×1080 (Full HD) or higher
+- **Frame Rate**: 30-60 FPS (frames per second); high-speed applications may use 120+ FPS
+- **Field of View (FOV)**: 60-90 degrees horizontal (varies with lens)
+- **Dynamic Range**: 8-bit (256 levels) to 12-bit (4096 levels) per color channel
+
+**Coordinate Frame**: Camera coordinate system has:
+- **X-axis**: Points right
+- **Y-axis**: Points down (image coordinates)
+- **Z-axis**: Points forward (optical axis, depth direction)
+
+**Noise Sources**:
+1. **Shot noise**: Photon arrival statistics (more pronounced in low light)
+2. **Read noise**: Sensor electronics noise (affects dark pixels)
+3. **Motion blur**: Object or camera movement during exposure
+4. **Lens distortion**: Radial and tangential distortion requiring calibration
+
+**Example Use Cases**:
+- Object detection and tracking (e.g., "find the cup on the table")
+- Visual odometry (estimating robot motion from frame-to-frame changes)
+- Human pose estimation (detecting people for interaction)
+- Scene segmentation (separating objects from background)
+
+**Typical Hardware**: Intel RealSense RGB sensors, USB webcams (Logitech C920), industrial cameras (FLIR, Basler)
+
+**Limitations**:
+- No depth information (2D projection of 3D world)
+- Lighting dependent (poor performance in darkness or harsh shadows)
+- Sensitive to occlusion (objects blocking view)
+
+---
+
+#### 1.1.2 Depth Cameras (RGBD Sensors)
+
+**Function**: Provide per-pixel depth measurements in addition to color, enabling 3D scene reconstruction.
+
+**Technologies**:
+
+1. **Stereo Vision**: Uses two RGB cameras separated by a baseline (like human eyes). Depth is computed from disparity (pixel offset) between left and right images.
+   - **Pros**: Passive (no active illumination), works outdoors
+   - **Cons**: Computationally expensive (stereo matching), fails on textureless surfaces
+
+2. **Structured Light**: Projects known infrared (IR) pattern onto scene; depth computed from pattern deformation.
+   - **Examples**: Microsoft Kinect v1, Intel RealSense D400 series
+   - **Pros**: Dense depth maps, real-time performance
+   - **Cons**: Interference in sunlight (IR washed out), limited range (0.3-10m)
+
+3. **Time-of-Flight (ToF)**: Measures time for IR light pulse to travel to object and back.
+   - **Examples**: Microsoft Kinect v2 (Azure Kinect), Sony DepthSense
+   - **Pros**: Fast, direct depth measurement
+   - **Cons**: Lower resolution than stereo/structured light, multipath interference (reflections)
+
+**Key Specifications**:
+- **Depth Range**: 0.3-10 meters (structured light), 0.5-5 meters (ToF)
+- **Depth Accuracy**: ±2-5 cm at 2 meters (structured light), ±1-3% of distance (ToF)
+- **Depth Resolution**: 640×480 to 1280×720
+- **Frame Rate**: 30-90 FPS
+
+**Output Format**: **Point Cloud** — Set of 3D points $(x, y, z)$ in camera frame, optionally with RGB color $(r, g, b)$ per point. Represented as:
+$$
+\mathbf{P} = \{(x_i, y_i, z_i, r_i, g_i, b_i) \mid i = 1, \ldots, N\}
+$$
+
+**Noise Characteristics**:
+- Depth noise increases quadratically with distance (stereo) or linearly (ToF)
+- Edge artifacts (mixed pixels at object boundaries)
+- Flying pixels (invalid depth at occlusion boundaries)
+
+**Example Use Cases**:
+- Obstacle detection and avoidance
+- 3D object recognition and pose estimation
+- SLAM (Simultaneous Localization and Mapping)
+- Grasp planning (estimating object geometry for manipulation)
+
+**Typical Hardware**: Intel RealSense D435i, Microsoft Azure Kinect, Stereolabs ZED 2
+
+---
+
+#### 1.1.3 LiDAR (Light Detection and Ranging)
+
+**Function**: Emit laser pulses and measure time-of-flight to compute distance, generating precise 3D point clouds.
+
+**Technology**: Rotating mirrors or MEMS (Micro-Electro-Mechanical Systems) scan laser beam across environment. Modern solid-state LiDAR uses phased arrays (no moving parts).
+
+**Types**:
+1. **2D LiDAR**: Single scanning plane (e.g., horizontal sweep at robot waist height)
+   - **Use**: Ground-level obstacle detection, localization in known maps
+   - **Examples**: SICK TiM5xx, Hokuyo UTM-30LX
+
+2. **3D LiDAR**: Multiple laser rings or scanning pattern for volumetric coverage
+   - **Use**: Full 3D mapping, autonomous vehicle perception
+   - **Examples**: Velodyne VLP-16 (16 rings), Ouster OS1 (64/128 rings)
+
+**Key Specifications**:
+- **Range**: 0.1-100+ meters (varies by power and wavelength)
+- **Accuracy**: ±2-3 cm (high-end) to ±5-10 cm (low-cost)
+- **Angular Resolution**: 0.1-1 degree (density of scan lines)
+- **Scan Rate**: 5-20 Hz (full 360° rotations per second)
+- **Number of Returns**: Multi-return LiDAR detects multiple objects along beam path (useful for foliage/glass)
+
+**Coordinate System**: Typically **spherical coordinates** $(r, \theta, \phi)$:
+- $r$: Range (distance)
+- $\theta$: Azimuth angle (horizontal rotation, 0-360°)
+- $\phi$: Elevation angle (vertical tilt for 3D LiDAR)
+
+Converted to **Cartesian** $(x, y, z)$ via:
+$$
+\begin{aligned}
+x &= r \cdot \cos(\phi) \cdot \cos(\theta) \\
+y &= r \cdot \cos(\phi) \cdot \sin(\theta) \\
+z &= r \cdot \sin(\phi)
+\end{aligned}
+$$
+
+**Noise Sources**:
+- Gaussian range noise (±2cm typical for indoor)
+- Reflectivity dependence (dark/shiny surfaces harder to detect)
+- Crosstalk (interference between multiple LiDAR units)
+
+**Example Use Cases**:
+- Localization (matching scans to known map)
+- Dynamic obstacle avoidance (detecting moving people/objects)
+- Terrain mapping (outdoor navigation)
+- Volumetric scene representation
+
+**Typical Hardware**: Velodyne Puck (VLP-16), Ouster OS1, Livox Mid-360, SLAMTEC RPLiDAR A3
+
+**Advantages Over Cameras**:
+- Works in darkness (active sensor)
+- Precise geometric measurements
+- Long range (10-100m vs. 1-10m for depth cameras)
+
+**Limitations**:
+- No color information (though some models add RGB camera)
+- Transparent surfaces (glass) poorly detected
+- High cost ($500-$100,000+ depending on quality)
+
+---
+
+#### 1.1.4 Inertial Measurement Units (IMUs)
+
+**Function**: Measure linear acceleration and angular velocity to estimate robot orientation and detect motion.
+
+**Components**:
+1. **Accelerometer**: Measures linear acceleration in 3 axes $(a_x, a_y, a_z)$
+   - **Gravity Sensing**: At rest, accelerometer reads $9.81 \, \text{m/s}^2$ downward
+   - **Range**: ±2g to ±16g (where $g = 9.81 \, \text{m/s}^2$)
+
+2. **Gyroscope**: Measures angular velocity (rotation rate) in 3 axes $(\omega_x, \omega_y, \omega_z)$
+   - **Units**: Degrees per second (°/s) or radians per second (rad/s)
+   - **Range**: ±250 °/s to ±2000 °/s
+
+3. **Magnetometer** (optional): Measures magnetic field for absolute heading (compass)
+   - **Problem**: Susceptible to magnetic interference (motors, metal structures)
+
+**9-DOF IMU**: 3-axis accelerometer + 3-axis gyroscope + 3-axis magnetometer (9 degrees of freedom)
+
+**Key Specifications**:
+- **Sample Rate**: 100-1000 Hz (high rate needed for accurate integration)
+- **Noise Density**: e.g., $0.3 \, \mu g/\sqrt{Hz}$ (accelerometer), $0.01 \, °/s/\sqrt{Hz}$ (gyroscope)
+- **Bias Stability**: Drift over time (major limitation for long-term integration)
+
+**Coordinate Frame** (body-fixed):
+- **X-axis**: Forward (robot front)
+- **Y-axis**: Left
+- **Z-axis**: Up
+
+**Noise and Drift**:
+- **Accelerometer**: Bias (constant offset), white noise, vibration sensitivity
+- **Gyroscope**: Bias drift (slow change over time, temperature-dependent), random walk
+- **Integration Drift**: Integrating noisy gyroscope data leads to unbounded error growth
+  - Orientation error grows linearly with time for gyro bias
+  - Position error grows quadratically if double-integrating accelerometer
+
+**Example Use Cases**:
+- Balance control (detect tilt for bipedal walking)
+- Fall detection (sudden acceleration spike)
+- Sensor fusion with cameras/LiDAR (complementary filter, Kalman filter)
+- Dead reckoning (short-term motion estimation)
+
+**Typical Hardware**:
+- Consumer: MPU-6050, MPU-9250 (Invensense/TDK), BMI088 (Bosch)
+- Industrial: VectorNav VN-100, LORD MicroStrain 3DM-GX5
+- Integrated: Intel RealSense D435i includes built-in IMU
+
+**Limitations**:
+- **Drift**: Cannot be used alone for long-term localization
+- **Requires Fusion**: Must combine with absolute positioning (GPS, vision) to correct drift
+
+---
+
+#### 1.1.5 Force/Torque Sensors
+
+**Function**: Measure forces and torques applied at robot joints or end-effector (gripper), enabling compliant manipulation and contact detection.
+
+**Technology**: Strain gauges measure deformation of sensing element when force applied.
+
+**Types**:
+1. **6-Axis Force/Torque (F/T) Sensor**: Measures 3 forces $(F_x, F_y, F_z)$ and 3 torques $(T_x, T_y, T_z)$
+   - **Mounting**: Typically at wrist (between arm and gripper)
+
+2. **Joint Torque Sensors**: Measure torque at each joint actuator
+   - **Use**: Whole-body force control, safe human-robot interaction
+
+**Key Specifications**:
+- **Force Range**: ±10 N to ±1000 N (depends on robot size)
+- **Torque Range**: ±1 Nm to ±100 Nm
+- **Resolution**: 0.01-0.1 N (force), 0.001-0.01 Nm (torque)
+- **Sample Rate**: 100-1000 Hz
+
+**Example Use Cases**:
+- Contact detection ("Did the gripper touch the object?")
+- Compliant control (adjusting grip force to avoid crushing)
+- Assembly tasks (insertion with force feedback)
+- Safe interaction (detect collisions, implement soft limits)
+
+**Typical Hardware**: ATI Industrial Automation Mini40/Nano17, Robotiq FT 300, OnRobot HEX-E
+
+**Limitations**:
+- Expensive ($2,000-$10,000+ per sensor)
+- Adds weight and complexity to end-effector
+- Requires careful calibration (temperature drift, zero-offset)
+
+---
+
+### 1.2 Sensor Characteristics and Limitations
+
+Understanding sensor specifications and failure modes is critical for robust Physical AI systems.
+
+#### 1.2.1 Field of View (FOV)
+
+**Definition**: The angular extent of the observable world visible to the sensor.
+
+**Camera FOV**:
+- **Wide-angle**: 90-120° (fisheye lenses) — large coverage but more distortion
+- **Normal**: 60-75° (typical webcam)
+- **Narrow**: 30-45° (telephoto) — distant detail but limited peripheral vision
+
+**LiDAR FOV**:
+- **2D LiDAR**: 180-360° horizontal, ~1° vertical
+- **3D LiDAR**: 360° horizontal, 30-40° vertical (Velodyne VLP-16), up to 120° vertical (Ouster OS1)
+
+**Trade-offs**:
+- Wider FOV → more coverage but lower angular resolution (fewer pixels/degrees)
+- Multiple cameras with overlapping FOVs provide redundancy
+
+**Practical Implication**: Humanoid robots often use:
+- **Head-mounted cameras**: 60-90° FOV, pan-tilt mechanism for active vision
+- **Chest/torso LiDAR**: 360° horizontal for navigation
+- **Hand cameras**: Narrow FOV (30-45°) for manipulation tasks
+
+---
+
+#### 1.2.2 Resolution and Sampling
+
+**Spatial Resolution**:
+- **Cameras**: Pixel count (e.g., 1280×720 = 921,600 pixels)
+  - Higher resolution → more detail but higher compute cost
+- **LiDAR**: Angular resolution (e.g., 0.25° → 1440 points per 360° scan)
+
+**Temporal Resolution** (Frame Rate):
+- 30 FPS typical for cameras (33 ms per frame)
+- 10-20 Hz common for LiDAR
+- 100-1000 Hz for IMUs
+
+**Nyquist Theorem**: To capture motion without aliasing, sample rate must be > 2× max frequency
+- Example: Detecting vibrations at 50 Hz requires > 100 Hz sampling
+
+**Practical Implication**: Balance resolution with:
+- **Compute**: Processing 4K video (8.3 Mpixels) requires 100× more FLOPS than VGA (0.3 Mpixels)
+- **Latency**: Higher resolution → longer processing time
+- **Bandwidth**: 1080p @ 30 FPS = ~373 MB/s uncompressed
+
+---
+
+#### 1.2.3 Range and Accuracy
+
+**Range** (maximum distance):
+- Depth cameras: 0.3-10 m (structured light), 0.5-5 m (ToF)
+- LiDAR: 10-100+ m
+- Cameras: Unlimited (limited by pixel resolution and optics)
+
+**Accuracy** (measurement error):
+- **Absolute Error**: Constant offset (e.g., ±2 cm for LiDAR)
+- **Relative Error**: Percentage of measured value (e.g., ±2% for ToF depth)
+
+**Depth Camera Error Model** (structured light):
+$$
+\sigma_z \approx \frac{z^2}{f \cdot b} \cdot \sigma_d
+$$
+Where:
+- $\sigma_z$: Depth error
+- $z$: Distance to object
+- $f$: Focal length
+- $b$: Stereo baseline
+- $\sigma_d$: Disparity error (pixel matching uncertainty)
+
+**Key Insight**: Depth error grows **quadratically** with distance → depth cameras less reliable beyond 5-8 meters.
+
+**LiDAR Error Model**:
+$$
+\sigma_r = \sigma_{\text{tof}} + k_{\text{refl}} \cdot (1 - \rho)
+$$
+Where:
+- $\sigma_{\text{tof}}$: Time-of-flight measurement noise (~2 cm)
+- $k_{\text{refl}}$: Reflectivity coefficient
+- $\rho$: Surface reflectivity (0 = black, 1 = mirror)
+
+**Practical Implication**: Dark, non-reflective surfaces (e.g., black fabric) have 2-3× higher range error.
+
+---
+
+#### 1.2.4 Sensor Noise and Calibration
+
+**Noise Types**:
+
+1. **Gaussian (White) Noise**: Random fluctuations around true value
+   - **Model**: $y = x + \mathcal{N}(0, \sigma^2)$
+   - **Mitigation**: Averaging multiple measurements reduces noise by $1/\sqrt{N}$
+
+2. **Bias (Systematic Error)**: Constant offset from true value
+   - **Model**: $y = x + b$
+   - **Mitigation**: Calibration (measure bias, subtract from future readings)
+
+3. **Drift**: Slow change in bias over time (e.g., gyroscope drift)
+   - **Mitigation**: Periodic recalibration, sensor fusion with drift-free sensors
+
+**Calibration Types**:
+
+1. **Intrinsic Calibration**: Correct sensor-specific errors
+   - **Camera**: Lens distortion, focal length, principal point
+   - **IMU**: Accelerometer/gyro bias, scale factor, axis misalignment
+
+2. **Extrinsic Calibration**: Determine sensor pose relative to robot body
+   - **Example**: Camera mounted on robot head → need transformation from camera frame to robot base frame
+
+**Camera Calibration** (Zhang's method):
+- Use checkerboard target at multiple poses
+- Solve for intrinsic matrix $\mathbf{K}$ and distortion coefficients $k_1, k_2, \ldots$
+- **Tools**: OpenCV `cv2.calibrateCamera()`
+
+**IMU Calibration**:
+- **Static Calibration**: Place IMU in 6 orientations (±X, ±Y, ±Z facing up), measure gravity vector
+- **Dynamic Calibration**: Rotate IMU through known angles, compare gyro integration to ground truth
+
+**Practical Implication**: Uncalibrated sensors can introduce 5-10% errors → degrades localization and control.
+
+---
+
+#### 1.2.5 Environmental Factors
+
+**Lighting Conditions** (affects cameras):
+- **Low Light**: Increased shot noise, motion blur (longer exposure)
+- **Bright Light**: Saturated pixels, reduced dynamic range
+- **Backlight**: Subject in shadow (underexposed) against bright background
+
+**Transparent/Reflective Surfaces**:
+- **LiDAR**: Glass/mirrors cause false readings (specular reflection)
+- **Depth Cameras**: Windows appear as invalid depth (IR passes through)
+
+**Weather** (outdoor robots):
+- **Rain/Fog**: Scatters LiDAR/depth camera light → reduced range
+- **Sun**: Washes out structured light IR patterns
+- **Temperature**: IMU bias drift increases with temperature change
+
+**Vibrations**:
+- **IMU**: Mechanical vibrations (motor noise) corrupt accelerometer readings
+- **Cameras**: Vibration causes motion blur
+
+**Mitigation Strategies**:
+- **Sensor Fusion**: Combine multiple sensor modalities (e.g., LiDAR + camera)
+- **Filtering**: Low-pass filter to remove high-frequency vibration noise
+- **Adaptive Algorithms**: Adjust parameters based on detected conditions (e.g., increase exposure in low light)
+
+---
+
+### 1.3 Sensor Fusion Basics
+
+**Motivation**: No single sensor is perfect. Each has:
+- **Complementary Strengths**: Cameras provide color/texture, LiDAR provides geometry
+- **Different Failure Modes**: LiDAR fails on glass; cameras fail in darkness
+
+**Sensor Fusion**: Combining data from multiple sensors to produce more accurate, reliable estimates than any single sensor alone.
+
+#### 1.3.1 Complementary Filtering
+
+**Concept**: Combine high-frequency data from one sensor with low-frequency data from another.
+
+**Example**: IMU + Camera for Orientation
+- **Gyroscope**: Accurate short-term (high-frequency), drifts long-term (low-frequency)
+- **Accelerometer/Magnetometer**: Accurate long-term (measures gravity/magnetic north), noisy short-term
+
+**Complementary Filter**:
+$$
+\theta_{\text{fused}}(t) = \alpha \cdot (\theta_{\text{gyro}}(t-1) + \omega \cdot \Delta t) + (1-\alpha) \cdot \theta_{\text{accel}}(t)
+$$
+
+Where:
+- $\alpha = 0.98$ (typical): Trust gyro for 98% (short-term), accelerometer for 2% (long-term drift correction)
+- $\omega$: Angular velocity from gyroscope
+- $\theta_{\text{accel}}$: Orientation from accelerometer (via gravity vector)
+
+**Advantage**: Simple, computationally cheap (1-2 lines of code)
+**Limitation**: Fixed weights ($\alpha$) don't adapt to changing noise levels
+
+---
+
+#### 1.3.2 Kalman Filtering
+
+**Concept**: Optimal fusion assuming Gaussian noise. Dynamically adjusts sensor weights based on estimated uncertainty.
+
+**Kalman Filter Cycle**:
+1. **Predict**: Use motion model to predict next state
+   $$\hat{x}_{k|k-1} = \mathbf{F} \hat{x}_{k-1} + \mathbf{B} u_k$$
+
+2. **Update**: Correct prediction with sensor measurement
+   $$\hat{x}_k = \hat{x}_{k|k-1} + \mathbf{K}_k (z_k - \mathbf{H} \hat{x}_{k|k-1})$$
+
+   Where $\mathbf{K}_k$ is **Kalman gain** (optimal weight between prediction and measurement)
+
+**Example**: Fusing IMU gyroscope (high-rate, drifty) with camera pose (low-rate, drift-free)
+
+**Extended Kalman Filter (EKF)**: Handles nonlinear motion/sensor models (common in robotics)
+
+**Unscented Kalman Filter (UKF)**: Better handles highly nonlinear systems than EKF
+
+**Tools**: Python `filterpy` library, ROS `robot_localization` package
+
+---
+
+#### 1.3.3 Multi-Sensor Data Association
+
+**Problem**: When multiple sensors detect objects, which detections correspond to the same real-world object?
+
+**Example**: Camera detects "person at (x=2, y=3)" and LiDAR detects "obstacle at (x=2.1, y=2.9)" → same person or different objects?
+
+**Solution Approaches**:
+
+1. **Nearest Neighbor**: Associate detections within distance threshold
+   - Simple but fails with clutter (many nearby objects)
+
+2. **Global Nearest Neighbor (GNN)**: Find assignment minimizing total distance
+   - Uses Hungarian algorithm (optimal for bipartite matching)
+
+3. **Joint Probabilistic Data Association (JPDA)**: Considers all possible associations with probabilities
+
+**Practical Implication**: Self-driving cars use JPDA to fuse radar + camera + LiDAR detections of pedestrians/vehicles.
+
+---
+
+#### 1.3.4 Temporal vs. Spatial Fusion
+
+**Temporal Fusion**: Combine measurements from same sensor over time
+- **Example**: Average 10 LiDAR scans to reduce noise
+- **Trade-off**: Latency (100ms delay for 10 scans @ 10 Hz)
+
+**Spatial Fusion**: Combine measurements from different sensors at same time
+- **Example**: Project LiDAR points onto camera image for colored point cloud
+- **Requirement**: Extrinsic calibration (know relative pose of sensors)
+
+**Best Practice**: Use both — temporal for noise reduction, spatial for complementary information.
+
+---
+
+### 1.4 Coordinate Frames and Transformations
+
+**Challenge**: Each sensor reports data in its own **local coordinate frame**. To fuse data or control the robot, we need to transform all measurements into a **common reference frame** (typically robot base frame).
+
+#### 1.4.1 Coordinate Frame Conventions
+
+**ROS (Robot Operating System) Standard**:
+- **X**: Forward
+- **Y**: Left
+- **Z**: Up
+- **Right-hand rule**: Positive rotations follow right-hand rule
+
+**Camera Frame** (OpenCV/ROS convention):
+- **X**: Right
+- **Y**: Down (along image rows)
+- **Z**: Forward (depth, optical axis)
+
+**IMU Frame** (body-fixed):
+- Aligned with robot body (X=forward, Y=left, Z=up)
+
+#### 1.4.2 Homogeneous Transformations
+
+**Transformation** $\mathbf{T}$: Combines rotation $\mathbf{R}$ (3×3) and translation $\mathbf{t}$ (3×1):
+$$
+\mathbf{T} = \begin{bmatrix}
+\mathbf{R} & \mathbf{t} \\
+0 & 1
+\end{bmatrix} \in \mathbb{R}^{4 \times 4}
+$$
+
+**Transforming a point** from frame $A$ to frame $B$:
+$$
+\mathbf{p}_B = \mathbf{T}_{BA} \cdot \mathbf{p}_A
+$$
+
+Where $\mathbf{p}_A = [x, y, z, 1]^T$ in homogeneous coordinates.
+
+**Chaining Transformations**:
+$$
+\mathbf{T}_{\text{base} \to \text{camera}} = \mathbf{T}_{\text{base} \to \text{head}} \cdot \mathbf{T}_{\text{head} \to \text{camera}}
+$$
+
+**Practical Example**: LiDAR mounted on robot chest (0.8m high, facing forward):
+$$
+\mathbf{T}_{\text{base} \to \text{lidar}} = \begin{bmatrix}
+1 & 0 & 0 & 0 \\
+0 & 1 & 0 & 0 \\
+0 & 0 & 1 & 0.8 \\
+0 & 0 & 0 & 1
+\end{bmatrix}
+$$
+
+**Tools**:
+- Python: `numpy` matrices, `scipy.spatial.transform.Rotation`
+- ROS: `tf2` library (automatic frame tracking)
+- Robotics libraries: `pytransform3d`, `transforms3d`
+
+---
+
+## Part 2: Hands-On Implementation (Practice)
+
+### 2.1 Environment Setup
+
+Before running sensor code examples, install required Python libraries.
+
+#### Installation Instructions
+
+**Ubuntu/Linux**:
+```bash
+# Update system
+sudo apt update
+
+# Install Python dependencies
+pip install numpy matplotlib opencv-python open3d scipy
+
+# Install optional dependencies for 3D visualization
+pip install pyqt5  # For open3d GUI backend
+```
+
+**Windows**:
+```powershell
+# Using pip
+pip install numpy matplotlib opencv-python open3d scipy
+```
+
+**macOS**:
+```bash
+# Using pip (or pip3)
+pip3 install numpy matplotlib opencv-python open3d scipy
+```
+
+#### Verification
+
+Test your installation:
+
+```python
+import cv2
+import numpy as np
+import open3d as o3d
+import matplotlib.pyplot as plt
+
+print(f"OpenCV version: {cv2.__version__}")
+print(f"NumPy version: {np.__version__}")
+print(f"Open3D version: {o3d.__version__}")
+print("✓ All libraries installed successfully!")
+```
+
+Expected output:
+```
+OpenCV version: 4.8.x
+NumPy version: 1.24.x
+Open3D version: 0.17.x
+✓ All libraries installed successfully!
+```
+
+#### Common Installation Errors
+
+**Error 1**: `ModuleNotFoundError: No module named 'cv2'`
+- **Cause**: OpenCV not installed or wrong package name
+- **Fix**: `pip install opencv-python` (NOT `pip install cv2`)
+
+**Error 2**: `ImportError: DLL load failed` (Windows)
+- **Cause**: Missing Visual C++ Redistributable
+- **Fix**: Install from https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+**Error 3**: `open3d` GUI doesn't display (Linux)
+- **Cause**: Missing Qt5 libraries
+- **Fix**: `sudo apt install python3-pyqt5` or `pip install pyqt5`
+
+---
+
+### 2.2 Practice Example 1: Reading and Processing Camera Data
+
+#### Overview
+
+This example demonstrates:
+1. Capturing frames from a webcam using OpenCV
+2. Converting color spaces (BGR ↔ RGB ↔ Grayscale)
+3. Applying basic image processing (edge detection)
+4. Handling camera calibration
+
+Create a file: `content/code/Ch2/camera_capture.py`
+
+```python
+"""
+Camera Capture and Processing
+Chapter 2: Humanoid Sensor Systems
+Physical AI and Humanoid Robotics Textbook
+
+Demonstrates reading RGB camera data, color space conversion,
+and basic image processing.
+"""
+
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+def capture_webcam_frame():
+    """Capture a single frame from default webcam."""
+    # Open video capture (0 = default camera)
+    cap = cv2.VideoCapture(0)
+
+    if not cap.isOpened():
+        raise RuntimeError("Cannot open webcam. Check camera connection.")
+
+    # Set camera properties (optional)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FPS, 30)
+
+    # Capture frame
+    ret, frame = cap.read()
+    cap.release()
+
+    if not ret:
+        raise RuntimeError("Failed to capture frame from webcam.")
+
+    return frame
+
+def process_camera_frame(frame):
+    """
+    Apply image processing pipeline to camera frame.
+
+    Args:
+        frame: BGR image from cv2.VideoCapture (HxWx3 numpy array)
+
+    Returns:
+        processed_results: dict with processed images
+    """
+    # OpenCV uses BGR by default; convert to RGB for matplotlib
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    # Convert to grayscale (luminance)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Edge detection (Canny algorithm)
+    edges = cv2.Canny(gray, threshold1=50, threshold2=150)
+
+    # Gaussian blur (noise reduction)
+    blurred = cv2.GaussianBlur(gray, ksize=(5, 5), sigmaX=1.5)
+
+    return {
+        'rgb': frame_rgb,
+        'gray': gray,
+        'edges': edges,
+        'blurred': blurred
+    }
+
+def simulate_camera_data():
+    """
+    Create synthetic camera data if no webcam available.
+    """
+    # Generate checkerboard test pattern
+    img = np.zeros((480, 640, 3), dtype=np.uint8)
+    square_size = 40
+
+    for i in range(0, 480, square_size):
+        for j in range(0, 640, square_size):
+            if ((i // square_size) + (j // square_size)) % 2 == 0:
+                img[i:i+square_size, j:j+square_size] = [255, 255, 255]
+
+    # Add colored circle
+    cv2.circle(img, (320, 240), 80, (255, 0, 0), -1)  # Blue circle (BGR)
+
+    return img
+
+def visualize_camera_processing():
+    """
+    Main function: capture and visualize camera processing pipeline.
+    """
+    print("=" * 60)
+    print("Camera Data Processing Demo")
+    print("=" * 60)
+
+    # Try to capture from webcam; fallback to synthetic data
+    try:
+        print("[1/3] Capturing frame from webcam...")
+        frame_bgr = capture_webcam_frame()
+        print("  ✓ Webcam frame captured (640x480)")
+    except RuntimeError as e:
+        print(f"  ⚠ Webcam capture failed: {e}")
+        print("  → Using synthetic test pattern instead")
+        frame_bgr = simulate_camera_data()
+
+    # Process frame
+    print("[2/3] Processing image...")
+    results = process_camera_frame(frame_bgr)
+    print("  ✓ Applied RGB conversion, grayscale, edge detection, blur")
+
+    # Visualize
+    print("[3/3] Generating visualization...")
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    axes[0, 0].imshow(results['rgb'])
+    axes[0, 0].set_title('Original (RGB)', fontsize=14, fontweight='bold')
+    axes[0, 0].axis('off')
+
+    axes[0, 1].imshow(results['gray'], cmap='gray')
+    axes[0, 1].set_title('Grayscale', fontsize=14, fontweight='bold')
+    axes[0, 1].axis('off')
+
+    axes[1, 0].imshow(results['edges'], cmap='gray')
+    axes[1, 0].set_title('Edge Detection (Canny)', fontsize=14, fontweight='bold')
+    axes[1, 0].axis('off')
+
+    axes[1, 1].imshow(results['blurred'], cmap='gray')
+    axes[1, 1].set_title('Gaussian Blur (σ=1.5)', fontsize=14, fontweight='bold')
+    axes[1, 1].axis('off')
+
+    plt.tight_layout()
+    plt.savefig('../../diagrams/Ch2/camera_processing.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+    print("=" * 60)
+    print("✓ Camera processing demo complete!")
+    print("  Saved: ../../diagrams/Ch2/camera_processing.png")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    visualize_camera_processing()
+```
+
+#### Expected Output
+
+- **4-panel figure** showing: (1) Original RGB image, (2) Grayscale, (3) Edge detection, (4) Blurred
+- Saved to: `content/diagrams/Ch2/camera_processing.png`
+
+#### Key Concepts Demonstrated
+
+1. **Color Space Conversion**: BGR (OpenCV default) ↔ RGB (matplotlib) ↔ Grayscale
+2. **Edge Detection**: Canny algorithm finds intensity gradients → outlines objects
+3. **Noise Reduction**: Gaussian blur smooths image before processing
+4. **Fallback Strategy**: Synthetic data if webcam unavailable (robust code)
+
+#### Troubleshooting
+
+**Issue**: "Cannot open webcam"
+- **Check**: Is camera connected? Does another application (Zoom, Teams) have exclusive access?
+- **Fix**: Close other camera apps, or use synthetic data mode
+
+**Issue**: Black/corrupted image
+- **Cause**: Insufficient warm-up time
+- **Fix**: Add `time.sleep(0.5)` after `cap = cv2.VideoCapture(0)`
+
+---
+
+### 2.3 Practice Example 2: Visualizing 3D Point Clouds
+
+#### Overview
+
+This example demonstrates:
+1. Generating synthetic point cloud data (simulated LiDAR/depth camera)
+2. Visualizing point clouds with Open3D
+3. Computing point cloud statistics (centroid, bounding box)
+4. Saving/loading point cloud files
+
+Create a file: `content/code/Ch2/point_cloud_visualization.py`
+
+```python
+"""
+Point Cloud Visualization
+Chapter 2: Humanoid Sensor Systems
+Physical AI and Humanoid Robotics Textbook
+
+Demonstrates creating, processing, and visualizing 3D point clouds
+from depth sensors and LiDAR.
+"""
+
+import numpy as np
+import open3d as o3d
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+def generate_synthetic_point_cloud():
+    """
+    Generate synthetic point cloud simulating a room scan.
+
+    Returns:
+        points: Nx3 numpy array of (x, y, z) coordinates
+        colors: Nx3 numpy array of (r, g, b) values [0-1]
+    """
+    points = []
+    colors = []
+
+    # Floor plane (z=0)
+    x_floor = np.random.uniform(-3, 3, 500)
+    y_floor = np.random.uniform(-3, 3, 500)
+    z_floor = np.zeros(500)
+    floor_points = np.stack([x_floor, y_floor, z_floor], axis=1)
+    floor_colors = np.tile([0.6, 0.6, 0.6], (500, 1))  # Gray floor
+
+    # Wall 1 (x=3)
+    y_wall1 = np.random.uniform(-3, 3, 300)
+    z_wall1 = np.random.uniform(0, 3, 300)
+    x_wall1 = np.full(300, 3.0)
+    wall1_points = np.stack([x_wall1, y_wall1, z_wall1], axis=1)
+    wall1_colors = np.tile([0.8, 0.8, 0.7], (300, 1))  # Beige wall
+
+    # Wall 2 (y=3)
+    x_wall2 = np.random.uniform(-3, 3, 300)
+    z_wall2 = np.random.uniform(0, 3, 300)
+    y_wall2 = np.full(300, 3.0)
+    wall2_points = np.stack([x_wall2, y_wall2, z_wall2], axis=1)
+    wall2_colors = np.tile([0.7, 0.8, 0.8], (300, 1))  # Light blue wall
+
+    # Object 1: Box (table)
+    box_points = []
+    for i in range(200):
+        x = np.random.uniform(0.5, 1.5)
+        y = np.random.uniform(0.5, 1.5)
+        z = np.random.uniform(0.7, 0.8)  # Table height
+        box_points.append([x, y, z])
+    box_points = np.array(box_points)
+    box_colors = np.tile([0.6, 0.3, 0.1], (200, 1))  # Brown table
+
+    # Object 2: Sphere (ball on table)
+    sphere_center = np.array([1.0, 1.0, 1.0])
+    sphere_radius = 0.2
+    sphere_points = []
+    for i in range(150):
+        # Random point on sphere surface
+        theta = np.random.uniform(0, 2 * np.pi)
+        phi = np.random.uniform(0, np.pi)
+        x = sphere_radius * np.sin(phi) * np.cos(theta) + sphere_center[0]
+        y = sphere_radius * np.sin(phi) * np.sin(theta) + sphere_center[1]
+        z = sphere_radius * np.cos(phi) + sphere_center[2]
+        sphere_points.append([x, y, z])
+    sphere_points = np.array(sphere_points)
+    sphere_colors = np.tile([1.0, 0.2, 0.2], (150, 1))  # Red ball
+
+    # Combine all points
+    all_points = np.vstack([floor_points, wall1_points, wall2_points, box_points, sphere_points])
+    all_colors = np.vstack([floor_colors, wall1_colors, wall2_colors, box_colors, sphere_colors])
+
+    # Add realistic sensor noise (±2cm Gaussian)
+    noise = np.random.normal(0, 0.02, all_points.shape)
+    all_points += noise
+
+    return all_points, all_colors
+
+def analyze_point_cloud(points):
+    """
+    Compute statistics for point cloud.
+
+    Args:
+        points: Nx3 numpy array
+
+    Returns:
+        stats: dict with centroid, bounding box, point count
+    """
+    centroid = np.mean(points, axis=0)
+    min_bound = np.min(points, axis=0)
+    max_bound = np.max(points, axis=0)
+
+    return {
+        'num_points': points.shape[0],
+        'centroid': centroid,
+        'min_bound': min_bound,
+        'max_bound': max_bound,
+        'dimensions': max_bound - min_bound
+    }
+
+def visualize_point_cloud_matplotlib(points, colors):
+    """
+    Create 2D projections of point cloud using matplotlib.
+    """
+    fig = plt.figure(figsize=(15, 5))
+
+    # XY plane (top view)
+    ax1 = fig.add_subplot(131)
+    ax1.scatter(points[:, 0], points[:, 1], c=colors, s=1, alpha=0.6)
+    ax1.set_xlabel('X (m)', fontsize=12)
+    ax1.set_ylabel('Y (m)', fontsize=12)
+    ax1.set_title('Top View (XY Plane)', fontsize=14, fontweight='bold')
+    ax1.set_aspect('equal')
+    ax1.grid(True, alpha=0.3)
+
+    # XZ plane (side view)
+    ax2 = fig.add_subplot(132)
+    ax2.scatter(points[:, 0], points[:, 2], c=colors, s=1, alpha=0.6)
+    ax2.set_xlabel('X (m)', fontsize=12)
+    ax2.set_ylabel('Z (m)', fontsize=12)
+    ax2.set_title('Side View (XZ Plane)', fontsize=14, fontweight='bold')
+    ax2.set_aspect('equal')
+    ax2.grid(True, alpha=0.3)
+
+    # 3D view
+    ax3 = fig.add_subplot(133, projection='3d')
+    ax3.scatter(points[:, 0], points[:, 1], points[:, 2], c=colors, s=1, alpha=0.6)
+    ax3.set_xlabel('X (m)', fontsize=10)
+    ax3.set_ylabel('Y (m)', fontsize=10)
+    ax3.set_zlabel('Z (m)', fontsize=10)
+    ax3.set_title('3D View', fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+    plt.savefig('../../diagrams/Ch2/point_cloud_projections.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+def visualize_point_cloud_open3d(points, colors):
+    """
+    Interactive 3D visualization using Open3D.
+    """
+    # Create Open3D point cloud object
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+
+    # Add coordinate frame (X=red, Y=green, Z=blue)
+    coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+
+    # Visualize (opens interactive window)
+    print("  → Opening Open3D interactive viewer (close window to continue)...")
+    o3d.visualization.draw_geometries([pcd, coordinate_frame],
+                                      window_name="Point Cloud Visualization",
+                                      width=1024, height=768,
+                                      left=50, top=50)
+
+def main():
+    """
+    Main function: generate, analyze, and visualize point cloud.
+    """
+    print("=" * 60)
+    print("Point Cloud Visualization Demo")
+    print("=" * 60)
+
+    print("[1/4] Generating synthetic point cloud (simulated room scan)...")
+    points, colors = generate_synthetic_point_cloud()
+    print(f"  ✓ Generated {points.shape[0]} points")
+
+    print("[2/4] Analyzing point cloud statistics...")
+    stats = analyze_point_cloud(points)
+    print(f"  ✓ Centroid: ({stats['centroid'][0]:.2f}, {stats['centroid'][1]:.2f}, {stats['centroid'][2]:.2f}) m")
+    print(f"  ✓ Bounding box: {stats['dimensions'][0]:.2f} x {stats['dimensions'][1]:.2f} x {stats['dimensions'][2]:.2f} m")
+    print(f"  ✓ Point count: {stats['num_points']}")
+
+    print("[3/4] Creating matplotlib projections...")
+    visualize_point_cloud_matplotlib(points, colors)
+    print("  ✓ Saved: ../../diagrams/Ch2/point_cloud_projections.png")
+
+    print("[4/4] Launching Open3D interactive viewer...")
+    visualize_point_cloud_open3d(points, colors)
+
+    print("=" * 60)
+    print("✓ Point cloud visualization demo complete!")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    main()
+```
+
+#### Expected Output
+
+1. **3-panel matplotlib figure**: Top view (XY), side view (XZ), 3D view
+   - Saved to: `content/diagrams/Ch2/point_cloud_projections.png`
+2. **Open3D interactive window**: Navigate with mouse (drag=rotate, scroll=zoom, right-drag=pan)
+
+#### Key Concepts Demonstrated
+
+1. **Point Cloud Representation**: Nx3 array of (x, y, z) coordinates + Nx3 RGB colors
+2. **Coordinate Frame**: X=red, Y=green, Z=blue axes visualized
+3. **Statistical Analysis**: Centroid, bounding box computation
+4. **Sensor Noise**: Gaussian noise (±2cm) added to simulate real LiDAR
+
+#### Troubleshooting
+
+**Issue**: Open3D window doesn't appear
+- **Fix**: Install PyQt5: `pip install pyqt5`
+- **Alternative**: Use matplotlib-only visualization (comment out Open3D section)
+
+**Issue**: "Segmentation fault" on Linux
+- **Cause**: GPU driver incompatibility
+- **Fix**: Use CPU rendering: `export OPEN3D_CPU_RENDERING=1` before running script
+
+---
+
+### 2.4 Practice Example 3: IMU Data Interpretation and Orientation Estimation
+
+#### Overview
+
+This example demonstrates:
+1. Simulating IMU data (accelerometer + gyroscope)
+2. Estimating orientation from accelerometer (gravity vector)
+3. Integrating gyroscope data for orientation tracking
+4. Visualizing orientation drift
+
+Create a file: `content/code/Ch2/imu_orientation.py`
+
+```python
+"""
+IMU Data Interpretation and Orientation Estimation
+Chapter 2: Humanoid Sensor Systems
+Physical AI and Humanoid Robotics Textbook
+
+Demonstrates reading and interpreting IMU data for orientation estimation.
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+def simulate_imu_data(duration=10.0, sample_rate=100):
+    """
+    Simulate IMU data for a rotating robot.
+
+    Args:
+        duration: Simulation time (seconds)
+        sample_rate: IMU sample rate (Hz)
+
+    Returns:
+        time: Time array (seconds)
+        accel: Nx3 accelerometer data (m/s²)
+        gyro: Nx3 gyroscope data (rad/s)
+        true_angles: Nx3 ground truth orientation (roll, pitch, yaw in radians)
+    """
+    num_samples = int(duration * sample_rate)
+    time = np.linspace(0, duration, num_samples)
+
+    # Ground truth: robot rotates around Z-axis (yaw), slight pitch oscillation
+    true_yaw = 0.5 * time  # 0.5 rad/s rotation rate
+    true_pitch = 0.1 * np.sin(2 * np.pi * 0.5 * time)  # 0.5 Hz pitch oscillation
+    true_roll = np.zeros(num_samples)
+
+    true_angles = np.stack([true_roll, true_pitch, true_yaw], axis=1)
+
+    # Gyroscope: measures angular velocity (derivative of angles)
+    gyro_x = np.zeros(num_samples)  # No roll rate
+    gyro_y = 0.1 * 2 * np.pi * 0.5 * np.cos(2 * np.pi * 0.5 * time)  # Pitch rate
+    gyro_z = 0.5 * np.ones(num_samples)  # Constant yaw rate
+
+    # Add realistic gyro noise and bias
+    gyro_noise = np.random.normal(0, 0.01, (num_samples, 3))  # 0.01 rad/s noise
+    gyro_bias = np.array([0.005, -0.003, 0.002])  # Constant bias drift
+    gyro = np.stack([gyro_x, gyro_y, gyro_z], axis=1) + gyro_noise + gyro_bias
+
+    # Accelerometer: measures gravity + motion acceleration
+    # In body frame: gravity rotates as robot rotates
+    g = 9.81  # m/s²
+    accel = np.zeros((num_samples, 3))
+
+    for i in range(num_samples):
+        # Gravity in world frame: [0, 0, -g]
+        # Rotate into body frame using true angles
+        pitch = true_pitch[i]
+        roll = true_roll[i]
+
+        # Simplified rotation (small angle approximation for clarity)
+        accel[i, 0] = g * np.sin(pitch)  # Forward acceleration component
+        accel[i, 1] = -g * np.sin(roll) * np.cos(pitch)  # Left component
+        accel[i, 2] = -g * np.cos(roll) * np.cos(pitch)  # Up component
+
+    # Add accelerometer noise
+    accel += np.random.normal(0, 0.1, (num_samples, 3))  # 0.1 m/s² noise
+
+    return time, accel, gyro, true_angles
+
+def estimate_orientation_from_accelerometer(accel):
+    """
+    Estimate roll and pitch from accelerometer (gravity vector).
+    Cannot estimate yaw (rotation around gravity axis).
+
+    Args:
+        accel: Nx3 accelerometer data (m/s²)
+
+    Returns:
+        roll: Roll angle (rotation around X-axis, radians)
+        pitch: Pitch angle (rotation around Y-axis, radians)
+    """
+    # Normalize accelerometer vector (should point toward gravity)
+    accel_norm = accel / np.linalg.norm(accel, axis=1, keepdims=True)
+
+    # Extract roll and pitch from gravity vector direction
+    roll = np.arctan2(accel_norm[:, 1], accel_norm[:, 2])
+    pitch = np.arctan2(-accel_norm[:, 0], np.sqrt(accel_norm[:, 1]**2 + accel_norm[:, 2]**2))
+
+    return roll, pitch
+
+def integrate_gyroscope(gyro, dt):
+    """
+    Integrate gyroscope data to estimate orientation (suffers from drift).
+
+    Args:
+        gyro: Nx3 gyroscope data (rad/s)
+        dt: Time step (seconds)
+
+    Returns:
+        angles: Nx3 integrated angles (roll, pitch, yaw in radians)
+    """
+    num_samples = gyro.shape[0]
+    angles = np.zeros((num_samples, 3))
+
+    for i in range(1, num_samples):
+        # Simple Euler integration: angle[i] = angle[i-1] + gyro[i] * dt
+        angles[i] = angles[i-1] + gyro[i] * dt
+
+    return angles
+
+def complementary_filter(accel, gyro, dt, alpha=0.98):
+    """
+    Fuse accelerometer and gyroscope using complementary filter.
+
+    Args:
+        accel: Nx3 accelerometer data (m/s²)
+        gyro: Nx3 gyroscope data (rad/s)
+        dt: Time step (seconds)
+        alpha: Weight for gyro (0.98 typical: trust gyro 98%, accel 2%)
+
+    Returns:
+        fused_angles: Nx3 fused orientation (roll, pitch, yaw)
+    """
+    num_samples = accel.shape[0]
+    fused_angles = np.zeros((num_samples, 3))
+
+    for i in range(1, num_samples):
+        # Get accelerometer-based angles (roll, pitch only)
+        accel_roll, accel_pitch = estimate_orientation_from_accelerometer(accel[i:i+1])
+
+        # Complementary filter for roll and pitch
+        fused_angles[i, 0] = alpha * (fused_angles[i-1, 0] + gyro[i, 0] * dt) + (1 - alpha) * accel_roll
+        fused_angles[i, 1] = alpha * (fused_angles[i-1, 1] + gyro[i, 1] * dt) + (1 - alpha) * accel_pitch
+
+        # Yaw: only gyroscope available (accelerometer can't measure yaw)
+        fused_angles[i, 2] = fused_angles[i-1, 2] + gyro[i, 2] * dt
+
+    return fused_angles
+
+def visualize_orientation_estimates(time, true_angles, gyro_angles, fused_angles):
+    """
+    Plot orientation estimates vs. ground truth.
+    """
+    fig, axes = plt.subplots(3, 1, figsize=(12, 10))
+
+    angle_names = ['Roll', 'Pitch', 'Yaw']
+
+    for i, (ax, name) in enumerate(zip(axes, angle_names)):
+        ax.plot(time, np.rad2deg(true_angles[:, i]), 'k-', linewidth=2, label='Ground Truth')
+        ax.plot(time, np.rad2deg(gyro_angles[:, i]), 'r--', linewidth=1.5, alpha=0.7, label='Gyroscope Only (Drifts)')
+        ax.plot(time, np.rad2deg(fused_angles[:, i]), 'b-', linewidth=1.5, label='Complementary Filter')
+
+        ax.set_xlabel('Time (s)', fontsize=12)
+        ax.set_ylabel(f'{name} (degrees)', fontsize=12)
+        ax.set_title(f'{name} Angle Estimation', fontsize=14, fontweight='bold')
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig('../../diagrams/Ch2/imu_orientation_estimation.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+def main():
+    """
+    Main function: simulate IMU data and estimate orientation.
+    """
+    print("=" * 60)
+    print("IMU Orientation Estimation Demo")
+    print("=" * 60)
+
+    print("[1/4] Simulating IMU data (10 seconds @ 100 Hz)...")
+    duration = 10.0
+    sample_rate = 100  # Hz
+    dt = 1.0 / sample_rate
+
+    time, accel, gyro, true_angles = simulate_imu_data(duration, sample_rate)
+    print(f"  ✓ Generated {len(time)} samples")
+    print(f"  ✓ Accelerometer: {accel.shape[0]} samples of (ax, ay, az)")
+    print(f"  ✓ Gyroscope: {gyro.shape[0]} samples of (ωx, ωy, ωz)")
+
+    print("[2/4] Integrating gyroscope data (will drift)...")
+    gyro_angles = integrate_gyroscope(gyro, dt)
+    final_yaw_error = np.abs(gyro_angles[-1, 2] - true_angles[-1, 2])
+    print(f"  ⚠ Yaw drift after 10s: {np.rad2deg(final_yaw_error):.2f} degrees")
+
+    print("[3/4] Applying complementary filter (fusing accel + gyro)...")
+    fused_angles = complementary_filter(accel, gyro, dt, alpha=0.98)
+    final_pitch_error = np.abs(fused_angles[-1, 1] - true_angles[-1, 1])
+    print(f"  ✓ Pitch error after 10s: {np.rad2deg(final_pitch_error):.2f} degrees")
+    print("  → Complementary filter corrects gyro drift using accelerometer!")
+
+    print("[4/4] Generating visualization...")
+    visualize_orientation_estimates(time, true_angles, gyro_angles, fused_angles)
+    print("  ✓ Saved: ../../diagrams/Ch2/imu_orientation_estimation.png")
+
+    print("=" * 60)
+    print("KEY INSIGHTS:")
+    print("1. Gyroscope-only integration drifts due to bias")
+    print("2. Accelerometer provides absolute pitch/roll (from gravity)")
+    print("3. Complementary filter fuses both: short-term gyro, long-term accel")
+    print("4. Yaw cannot be corrected by accelerometer (need magnetometer/vision)")
+    print("=" * 60)
+
+if __name__ == "__main__":
+    main()
+```
+
+#### Expected Output
+
+- **3-panel time series plot**: Roll, Pitch, Yaw angles comparing:
+  1. Ground truth (black)
+  2. Gyroscope-only integration (red, drifts)
+  3. Complementary filter fusion (blue, drift-corrected)
+- Saved to: `content/diagrams/Ch2/imu_orientation_estimation.png`
+
+#### Key Concepts Demonstrated
+
+1. **Gyroscope Integration**: $\theta(t) = \theta(t-1) + \omega \cdot \Delta t$ (accumulates error)
+2. **Accelerometer Orientation**: Estimates pitch/roll from gravity direction
+3. **Complementary Filter**: Weighted fusion (98% gyro, 2% accel) corrects drift
+4. **Sensor Limitations**: Accelerometer cannot measure yaw (rotation around gravity)
+
+#### Troubleshooting
+
+**Issue**: Plot shows discontinuities
+- **Cause**: Angle wrapping (±180° discontinuity)
+- **Fix**: Use `numpy.unwrap()` to remove 2π jumps
+
+---
+
+## Part 3: Optional Hardware Deployment
+
+This section provides guidance for deploying sensor code to real hardware platforms (NVIDIA Jetson, Raspberry Pi, actual robots). **This section is optional** and assumes access to hardware.
+
+### 3.1 Hardware Requirements
+
+**Recommended Development Kits**:
+
+1. **NVIDIA Jetson Nano** (entry-level, $99)
+   - GPU-accelerated inference (128-core Maxwell GPU)
+   - 4GB RAM
+   - Good for: camera processing, depth estimation, small neural networks
+
+2. **NVIDIA Jetson Xavier NX** (mid-range, $399)
+   - 384-core Volta GPU, 6-core CPU
+   - 8GB RAM
+   - Good for: real-time SLAM, VLA models, multi-sensor fusion
+
+3. **Raspberry Pi 4 Model B** (low-cost, $55-75)
+   - 4-core ARM CPU, 4-8GB RAM
+   - Good for: sensor data logging, lightweight vision (not real-time)
+
+**Sensors** (compatible with above platforms):
+
+- **Camera**: Intel RealSense D435i (~$300) — RGBD + IMU
+- **LiDAR**: SLAMTEC RPLiDAR A3 (~$300) — 2D 360° LiDAR, USB interface
+- **IMU**: SparkFun 9DOF IMU (MPU-9250, ~$15) — I2C interface
+
+### 3.2 Deployment Steps
+
+#### Step 1: Install ROS 2 on Jetson/Pi
+
+ROS 2 (Robot Operating System 2) provides standardized sensor interfaces.
+
+```bash
+# Ubuntu 20.04 (Jetson Nano/Xavier)
+sudo apt update
+sudo apt install ros-foxy-desktop python3-rosdep
+
+# Initialize rosdep
+sudo rosdep init
+rosdep update
+
+# Source ROS 2
+echo "source /opt/ros/foxy/setup.bash" >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### Step 2: Install Sensor Drivers
+
+**Intel RealSense**:
+```bash
+sudo apt install ros-foxy-realsense2-camera
+```
+
+**RPLiDAR**:
+```bash
+sudo apt install ros-foxy-rplidar-ros
+```
+
+#### Step 3: Launch Sensors
+
+**Camera**:
+```bash
+ros2 launch realsense2_camera rs_launch.py enable_depth:=true
+```
+
+**LiDAR**:
+```bash
+ros2 launch rplidar_ros rplidar_a3_launch.py
+```
+
+#### Step 4: Read Sensor Data in Python
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image, LaserScan
+import cv_bridge
+
+class SensorReader(Node):
+    def __init__(self):
+        super().__init__('sensor_reader')
+
+        # Subscribe to camera topic
+        self.cam_sub = self.create_subscription(
+            Image, '/camera/color/image_raw', self.camera_callback, 10)
+
+        # Subscribe to LiDAR topic
+        self.lidar_sub = self.create_subscription(
+            LaserScan, '/scan', self.lidar_callback, 10)
+
+        self.bridge = cv_bridge.CvBridge()
+
+    def camera_callback(self, msg):
+        # Convert ROS Image message to OpenCV format
+        frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        # Process frame...
+
+    def lidar_callback(self, msg):
+        # Extract LiDAR ranges
+        ranges = msg.ranges  # List of distances (meters)
+        # Process scan...
+
+def main():
+    rclpy.init()
+    node = SensorReader()
+    rclpy.spin(node)
+
+if __name__ == '__main__':
+    main()
+```
+
+### 3.3 Sim-to-Real Considerations
+
+**Challenge**: Code working in simulation may fail on real hardware due to:
+
+1. **Sensor Noise**: Simulated noise is often Gaussian; real sensors have outliers, systematic bias
+   - **Solution**: Add robust outlier rejection (RANSAC, median filtering)
+
+2. **Latency**: Real sensors have 10-100ms delay (USB bus, driver overhead)
+   - **Solution**: Use message timestamps, predict-ahead in control loop
+
+3. **Calibration**: Real cameras/LiDAR need calibration; simulator has perfect geometry
+   - **Solution**: Run calibration routine before deployment (see Section 1.2.4)
+
+4. **Lighting/Weather**: Simulator has perfect lighting; real world has glare, shadows, rain
+   - **Solution**: Test in diverse conditions, add fallback modes (e.g., switch to LiDAR if camera saturated)
+
+**Best Practices**:
+- **Start Simple**: Test single sensor at a time before fusion
+- **Log Everything**: Record raw sensor data (ROS bags) for offline debugging
+- **Gradual Integration**: Run simulation alongside hardware, gradually increase real sensor weight
+
+---
+
+## Review Questions
+
+Test your understanding of Chapter 2 concepts. Answers provided at the end.
+
+**Question 1** (Conceptual): Explain why depth cameras using structured light fail in direct sunlight, while LiDAR continues to work. *(Hint: Consider light power and wavelength.)*
+
+**Question 2** (Conceptual): An accelerometer at rest on a table reads $(0, 0, -9.81)$ m/s². If you rotate the sensor 90° around the X-axis (pitch forward), what will it read? Draw the new coordinate frame.
+
+**Question 3** (Specification): A depth camera has 640×480 resolution and 60° horizontal FOV. At 3 meters distance, what is the spatial resolution (cm per pixel) horizontally?
+*(Hint: Use trigonometry to find the width of the visible scene at 3m.)*
+
+**Question 4** (Sensor Fusion): A gyroscope has 0.01°/s bias drift. If you integrate it for 60 seconds without correction, how much angular error accumulates? Why is this problematic for humanoid balance?
+
+**Question 5** (Troubleshooting): Your LiDAR reports a person at (x=2, y=0), but your camera sees them at pixel (u=400, v=240). Assuming the camera is calibrated, what transformation is likely missing? *(Hint: Think about extrinsic calibration.)*
+
+---
+
+## Hands-On Exercises
+
+Practice your sensor processing skills with these guided exercises.
+
+### Exercise 1: Multi-Sensor Calibration
+
+**Task**: Extend `camera_capture.py` to perform camera calibration using a checkerboard pattern.
+
+**Steps**:
+1. Print a checkerboard pattern (9×6 squares, 25mm square size) from online template
+2. Capture 10-15 images of the checkerboard at different angles/distances
+3. Use OpenCV's `cv2.findChessboardCorners()` and `cv2.calibrateCamera()`
+4. Compute intrinsic matrix $\mathbf{K}$ and distortion coefficients
+5. Apply `cv2.undistort()` to remove lens distortion from a test image
+
+**Solution Guidance**:
+```python
+import cv2
+import numpy as np
+
+# Define checkerboard dimensions
+CHECKERBOARD = (9, 6)  # Inner corners
+criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+
+# Prepare object points (0,0,0), (1,0,0), (2,0,0), ..., (8,5,0)
+objp = np.zeros((CHECKERBOARD[0] * CHECKERBOARD[1], 3), np.float32)
+objp[:, :2] = np.mgrid[0:CHECKERBOARD[0], 0:CHECKERBOARD[1]].T.reshape(-1, 2)
+
+objpoints = []  # 3D points in real world
+imgpoints = []  # 2D points in image plane
+
+# Load images and find corners
+images = [f'calibration_{i}.jpg' for i in range(15)]
+for fname in images:
+    img = cv2.imread(fname)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    ret, corners = cv2.findChessboardCorners(gray, CHECKERBOARD, None)
+    if ret:
+        objpoints.append(objp)
+        corners2 = cv2.cornerSubPix(gray, corners, (11,11), (-1,-1), criteria)
+        imgpoints.append(corners2)
+
+# Calibrate camera
+ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
+
+print(f"Camera matrix K:\\n{mtx}")
+print(f"Distortion coefficients: {dist}")
+```
+
+**Expected Learning**: Understanding intrinsic calibration, distortion models, pixel-to-metric mapping.
+
+---
+
+### Exercise 2: Point Cloud Filtering and Downsampling
+
+**Task**: Modify `point_cloud_visualization.py` to implement voxel downsampling and statistical outlier removal.
+
+**Steps**:
+1. Generate dense point cloud (10,000+ points)
+2. Apply voxel grid filter (0.05m voxel size) using Open3D
+3. Apply statistical outlier removal (k=20 neighbors, std_ratio=2.0)
+4. Compare original vs. filtered point clouds (visualize side-by-side)
+5. Measure computation time for each step
+
+**Solution Guidance**:
+```python
+import open3d as o3d
+import time
+
+# 1. Generate dense point cloud
+pcd = o3d.geometry.PointCloud()
+pcd.points = o3d.utility.Vector3dVector(dense_points)
+
+# 2. Voxel downsampling
+start = time.time()
+pcd_downsampled = pcd.voxel_down_sample(voxel_size=0.05)
+print(f"Downsampling: {time.time() - start:.3f}s, {len(pcd.points)} → {len(pcd_downsampled.points)} points")
+
+# 3. Statistical outlier removal
+start = time.time()
+pcd_filtered, ind = pcd_downsampled.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+print(f"Outlier removal: {time.time() - start:.3f}s, removed {len(pcd_downsampled.points) - len(pcd_filtered.points)} outliers")
+
+# 4. Visualize
+o3d.visualization.draw_geometries([pcd, pcd_downsampled, pcd_filtered])
+```
+
+**Expected Learning**: Point cloud preprocessing techniques, trade-offs (speed vs. detail), outlier detection.
+
+---
+
+## Key Takeaways
+
+1. **Sensor Diversity**: Humanoid robots use multiple sensor types (cameras, depth, LiDAR, IMU, force/torque) to perceive environments robustly.
+
+2. **Complementary Strengths**: Cameras provide color/texture, LiDAR provides geometry, IMUs provide motion — combining them is essential.
+
+3. **Field of View Trade-offs**: Wide FOV gives more coverage but lower angular resolution; sensor placement matters.
+
+4. **Sensor Noise is Inevitable**: All sensors have noise (Gaussian, bias, drift); understanding noise characteristics enables effective filtering.
+
+5. **Calibration is Critical**: Intrinsic (sensor-specific) and extrinsic (sensor-to-robot) calibration correct systematic errors.
+
+6. **Sensor Fusion is Necessary**: Complementary filters, Kalman filters, and data association algorithms combine multi-sensor data for robust estimates.
+
+7. **Coordinate Frames**: Different sensors use different frames (camera, LiDAR, IMU, robot base); transformations are required for fusion.
+
+8. **Depth Cameras vs. LiDAR**: Depth cameras are short-range (0.3-10m), dense, low-cost; LiDAR is long-range (10-100m), sparse, expensive.
+
+9. **IMU Drift**: Gyroscopes drift without correction; must fuse with absolute sensors (accelerometer for pitch/roll, magnetometer/vision for yaw).
+
+10. **Sim-to-Real Gap**: Real sensors have noise, latency, calibration errors not present in simulation; test in diverse real-world conditions.
+
+---
+
+## References
+
+### Foundational Sources (Established)
+
+1. **Siciliano, B., & Khatib, O. (Eds.). (2016).** *Springer Handbook of Robotics* (2nd ed.). Springer. [https://doi.org/10.1007/978-3-319-32552-1](https://doi.org/10.1007/978-3-319-32552-1) [established]
+   *Comprehensive coverage of robot sensors (Part B, Chapters 6-9), including cameras, range sensors, force sensors, and tactile sensing.*
+
+2. **Thrun, S., Burgard, W., & Fox, D. (2005).** *Probabilistic Robotics*. MIT Press. ISBN: 978-0262201629 [established]
+   *Chapters 6-7 cover sensor models (beam models for LiDAR, landmark detection for cameras) and noise characteristics.*
+
+3. **Zhang, Z. (2000).** "A Flexible New Technique for Camera Calibration." *IEEE Transactions on Pattern Analysis and Machine Intelligence*, 22(11), 1330-1334. [https://doi.org/10.1109/34.888718](https://doi.org/10.1109/34.888718) [established]
+   *Standard method for camera intrinsic calibration using planar checkerboard targets.*
+
+4. **Furgale, P., Rehder, J., & Siegwart, R. (2013).** "Unified Temporal and Spatial Calibration for Multi-Sensor Systems." *Proc. IEEE/RSJ Int. Conf. Intelligent Robots and Systems (IROS)*, 1280-1286. [https://doi.org/10.1109/IROS.2013.6696514](https://doi.org/10.1109/IROS.2013.6696514) [established]
+   *Extrinsic calibration method for multi-sensor robotic systems (camera-IMU-LiDAR calibration).*
+
+5. **Madgwick, S. O. H., Harrison, A. J. L., & Vaidyanathan, R. (2011).** "Estimation of IMU and MARG Orientation Using a Gradient Descent Algorithm." *Proc. IEEE Int. Conf. Rehabilitation Robotics*, 1-7. [https://doi.org/10.1109/ICORR.2011.5975346](https://doi.org/10.1109/ICORR.2011.5975346) [established]
+   *Complementary filter for IMU orientation estimation (widely used in robotics, open-source implementation).*
+
+6. **Endres, F., Hess, J., Sturm, J., Cremers, D., & Burgard, W. (2014).** "3-D Mapping with an RGB-D Camera." *IEEE Transactions on Robotics*, 30(1), 177-187. [https://doi.org/10.1109/TRO.2013.2279412](https://doi.org/10.1109/TRO.2013.2279412) [established]
+   *RGBD-SLAM: Simultaneous localization and mapping using depth cameras (Kinect, RealSense).*
+
+7. **Rusu, R. B., & Cousins, S. (2011).** "3D is Here: Point Cloud Library (PCL)." *Proc. IEEE Int. Conf. Robotics and Automation (ICRA)*, 1-4. [https://doi.org/10.1109/ICRA.2011.5980567](https://doi.org/10.1109/ICRA.2011.5980567) [established]
+   *PCL library documentation: standard algorithms for point cloud processing (filtering, segmentation, registration).*
+
+### Tool Documentation
+
+8. **OpenCV Developers. (2025).** *OpenCV Documentation: Camera Calibration and 3D Reconstruction*. [Online]. [https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html) [tool documentation]
+   *API reference for camera calibration, stereo vision, pose estimation.*
+
+9. **Open3D Developers. (2025).** *Open3D Documentation: Geometry Processing*. [Online]. [http://www.open3d.org/docs/release/](http://www.open3d.org/docs/release/) [tool documentation]
+   *Python library for 3D data processing: point cloud I/O, visualization, filtering, registration.*
+
+10. **ROS 2 Documentation. (2025).** *sensor_msgs Interface Definitions*. [Online]. [https://docs.ros.org/en/humble/p/sensor_msgs/](https://docs.ros.org/en/humble/p/sensor_msgs/) [tool documentation]
+   *Standard message types for camera (Image), LiDAR (LaserScan, PointCloud2), IMU (Imu).*
+
+### Emerging Sources
+
+11. **Intel RealSense. (2024).** *Intel RealSense D400 Series Datasheet*. [Online]. [https://www.intelrealsense.com/depth-camera-d435i/](https://www.intelrealsense.com/depth-camera-d435i/) [emerging]
+   *Technical specifications for D435i depth camera: range accuracy (±2% @ 2m), global shutter, built-in IMU.*
+
+12. **Ouster. (2024).** *OS1 LiDAR Sensor Specifications*. [Online]. [https://ouster.com/products/scanning-lidar/os1-sensor/](https://ouster.com/products/scanning-lidar/os1-sensor/) [emerging]
+   *High-resolution 3D LiDAR: 64/128 channels, 120m range, 10-20 Hz, multi-return capability.*
+
+13. **Livox Technology. (2024).** *Mid-360 LiDAR: 360° FOV for Robotics*. [Online]. [https://www.livoxtech.com/mid-360](https://www.livoxtech.com/mid-360) [emerging]
+   *Low-cost ($500) solid-state LiDAR with 360° FOV, 40m range, non-repetitive scanning pattern for improved coverage.*
+
+14. **VectorNav. (2024).** *VN-100 IMU/AHRS Technical Specifications*. [Online]. [https://www.vectornav.com/products/detail/vn-100](https://www.vectornav.com/products/detail/vn-100) [emerging]
+   *Industrial-grade 9-DOF IMU: 0.05° RMS heading accuracy, onboard Kalman filter, 800 Hz output rate.*
+
+15. **Boston Dynamics. (2024).** *Spot Robot Sensor Suite*. [Online]. [https://www.bostondynamics.com/products/spot](https://www.bostondynamics.com/products/spot) [emerging]
+   *Example of real-world multi-sensor integration: 5 stereo cameras (360° vision), IMU, edge compute (NVIDIA Jetson).*
+
+---
+
+## Answer Key
+
+**Answer 1**: Structured light depth cameras emit infrared (IR) patterns. Sunlight contains strong IR components (~50% of solar spectrum), which overwhelms the camera's projected pattern → depth measurement fails. LiDAR uses pulsed lasers at specific wavelengths (typically 905nm or 1550nm) with much higher power (10-100W peak) and nanosecond gating, allowing it to filter out ambient light.
+
+**Answer 2**: Rotating 90° around X (pitch forward) rotates the Z-axis to point forward, and the Y-axis down. Gravity (world frame: $[0, 0, -9.81]$) now projects onto the rotated frame as: $a_x \approx 0$, $a_y \approx 0$, $a_z \approx -9.81$ (Z-axis now points forward, perpendicular to gravity).
+
+**Answer 3**: At 3m with 60° FOV, visible width = $2 \times 3 \times \tan(30°) = 3.46$ m. With 640 pixels horizontally, resolution = $3.46 / 640 = 0.0054$ m/pixel $\approx \mathbf{0.54 \, \text{cm/pixel}}$.
+
+**Answer 4**: Bias drift of 0.01°/s for 60s accumulates: $0.01 \times 60 = 0.6°$ error. For a humanoid, even 0.5° tilt error can cause balance failure (center of mass shifts outside support polygon).
+
+**Answer 5**: The transformation from camera frame to LiDAR frame (extrinsic calibration $\mathbf{T}_{\text{camera} \to \text{lidar}}$) is missing. Even if both sensors detect the same object, they report coordinates in different frames → need calibration to align them.
+
+---
+
+**End of Chapter 2**
+
+**Next Chapter Preview**: Chapter 3 will introduce ROS 2 fundamentals, including nodes, topics, services, and building your first humanoid robot package.
+
+---
+
+**Last Updated**: 2025-12-23
+**Tested On**: Ubuntu 22.04, Python 3.10, OpenCV 4.8, Open3D 0.17

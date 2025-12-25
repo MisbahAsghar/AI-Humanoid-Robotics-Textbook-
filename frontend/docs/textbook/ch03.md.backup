@@ -1,0 +1,1522 @@
+# Chapter 3: ROS 2 Fundamentals
+
+**Part**: 2 - ROS 2 and Robot Software Architecture
+**Estimated Reading Time**: 40-50 minutes
+**Estimated Practice Time**: 4-5 hours (including exercises)
+
+---
+
+## Learning Objectives
+
+By the end of this chapter, you will be able to:
+
+**Conceptual Understanding**:
+- Explain the ROS 2 architecture and its key design principles
+- Describe the differences between ROS 1 and ROS 2 (DDS middleware, real-time support)
+- Understand the publish-subscribe pattern and when to use it
+- Differentiate between topics, services, and actions and select appropriate communication patterns
+- Explain the role of the DDS (Data Distribution Service) middleware layer
+
+**Practical Skills**:
+- Install ROS 2 Humble on Ubuntu 22.04
+- Create and run ROS 2 Python nodes using rclpy
+- Implement publisher-subscriber communication with custom messages
+- Create service servers and clients for request-response patterns
+- Implement action servers and clients for long-running tasks with feedback
+- Visualize node graphs and debug ROS 2 systems using command-line tools and rqt
+
+---
+
+## Prerequisites
+
+**Conceptual Prerequisites**:
+- Chapter 1: Introduction to Physical AI
+- Chapter 2: Humanoid Sensor Systems
+- Basic understanding of networking concepts (client-server, publish-subscribe)
+- Familiarity with Python programming (classes, callbacks, threading)
+
+**Technical Setup Prerequisites**:
+- **Ubuntu 22.04 LTS** (strongly recommended; other platforms require Docker)
+- 20GB free disk space
+- 8GB RAM minimum (16GB recommended)
+- Python 3.10+
+- Internet connection for installation
+
+---
+
+## Part 1: Conceptual Foundations (Theory)
+
+### 1.1 What is ROS 2?
+
+**ROS 2 (Robot Operating System 2)** is an open-source middleware framework for building robot software. Despite its name, ROS is not an operating system but rather a **set of libraries, tools, and conventions** that facilitate communication between distributed processes in a robot system.
+
+#### 1.1.1 Why ROS 2?
+
+**ROS 1 Legacy**: ROS 1 (released 2007) became the de facto standard for academic and research robotics. However, it had fundamental limitations:
+- **Single point of failure**: ROS Master required for all communication → robot crashes if Master dies
+- **No real-time support**: TCP-based communication unsuitable for hard real-time control
+- **Security**: No built-in encryption or authentication
+- **Limited multi-robot support**: Difficult to coordinate fleets
+
+**ROS 2 Design Goals** (2017+):
+1. **No master node**: Decentralized discovery using DDS (Data Distribution Service)
+2. **Real-time capable**: Support for deterministic, low-latency communication
+3. **Multi-platform**: Linux, Windows, macOS, embedded (FreeRTOS, Zephyr)
+4. **Production-ready**: Security (DDS-Security), quality-of-service (QoS) policies, lifecycle management
+5. **Multi-robot native**: Built-in support for robot fleets and distributed systems
+
+**Key Differences**:
+
+| Feature | ROS 1 | ROS 2 |
+|---------|-------|-------|
+| **Architecture** | Master-slave (roscore required) | Peer-to-peer (DDS discovery) |
+| **Middleware** | Custom TCP/UDP + XML-RPC | DDS (OMG standard) |
+| **Real-time** | Best-effort only | QoS policies (reliable, real-time) |
+| **Security** | None (all nodes trusted) | DDS-Security (encryption, auth) |
+| **Platforms** | Linux (primary), limited Windows/macOS | Linux, Windows, macOS, RTOS |
+| **Languages** | C++, Python (rospy) | C++, Python (rclcpp, rclpy) |
+| **Lifecycle** | Basic launch files | Managed nodes with state machines |
+
+#### 1.1.2 ROS 2 Architecture Overview
+
+**Layered Architecture**:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  User Application (Python/C++ nodes)                │
+│  - Publishers, Subscribers, Services, Actions       │
+├─────────────────────────────────────────────────────┤
+│  ROS Client Library (rcl)                           │
+│  - rclpy (Python), rclcpp (C++)                     │
+│  - Node management, executor, QoS                   │
+├─────────────────────────────────────────────────────┤
+│  ROS Middleware Interface (rmw)                     │
+│  - Abstraction layer for DDS implementations        │
+├─────────────────────────────────────────────────────┤
+│  DDS Implementation (middleware)                    │
+│  - Fast DDS (default), CycloneDDS, Connext DDS     │
+│  - Discovery, serialization, transport              │
+├─────────────────────────────────────────────────────┤
+│  Operating System / Network (UDP/TCP/shared memory) │
+└─────────────────────────────────────────────────────┘
+```
+
+**Key Components**:
+
+1. **Nodes**: Independent processes that perform computation (e.g., `camera_driver`, `object_detector`, `motion_planner`)
+2. **Topics**: Named buses for streaming data (publish-subscribe pattern)
+3. **Services**: Request-response communication (synchronous RPC)
+4. **Actions**: Long-running tasks with feedback (asynchronous goal-based)
+5. **Parameters**: Runtime configuration values (can be changed dynamically)
+6. **Launch Files**: Declarative XML/Python/YAML for starting multiple nodes
+
+**Example Robot System**:
+```
+Camera Node → /camera/image (topic) → Object Detector Node
+                                          ↓
+                                    /objects (topic)
+                                          ↓
+                                    Motion Planner Node
+                                          ↓
+                                    /cmd_vel (topic) → Motor Controller Node
+```
+
+---
+
+### 1.2 Communication Patterns
+
+#### 1.2.1 Topics (Publish-Subscribe)
+
+**Pattern**: Asynchronous, one-to-many streaming data
+
+**Use Case**: Continuous sensor data, command streams, state updates
+
+**Characteristics**:
+- **Decoupled**: Publishers don't know about subscribers (and vice versa)
+- **Asynchronous**: Publisher sends data without waiting for response
+- **Many-to-many**: Multiple publishers and subscribers on same topic
+- **Typed**: Messages have defined schemas (`.msg` files)
+
+**Example Message Flow**:
+```
+Publisher (Camera)    Subscriber (Display)    Subscriber (Logger)
+    |                        |                        |
+    |------ [Image] -------->|                        |
+    |                        |                        |
+    |------ [Image] --------------------------------->|
+    |                        |                        |
+```
+
+**When to Use Topics**:
+- Sensor data streams (camera images, LiDAR scans, IMU readings)
+- Robot commands (velocity commands, joint positions)
+- State broadcasts (odometry, battery status, diagnostics)
+
+**Topic Naming Convention**:
+- Use namespaces: `/robot1/camera/image_raw`
+- Lowercase with underscores: `joint_states` (not `JointStates`)
+- Descriptive: `/scan` (LiDAR), `/cmd_vel` (velocity command)
+
+**Quality of Service (QoS)**:
+ROS 2 allows fine-grained QoS policies for topics:
+
+| Policy | Options | Description |
+|--------|---------|-------------|
+| **Reliability** | Best Effort, Reliable | Guaranteed delivery vs. low latency |
+| **Durability** | Volatile, Transient Local | Store last N messages for late joiners |
+| **History** | Keep Last N, Keep All | How many messages to buffer |
+| **Depth** | Integer (e.g., 10) | Buffer size for Keep Last |
+| **Lifespan** | Duration | Max time message valid before discard |
+| **Deadline** | Duration | Max time between messages (QoS violation if exceeded) |
+
+**Example**: Camera images use **Best Effort** (low latency, tolerate drops), while safety-critical commands use **Reliable** (guaranteed delivery).
+
+---
+
+#### 1.2.2 Services (Request-Response)
+
+**Pattern**: Synchronous, one-to-one RPC (Remote Procedure Call)
+
+**Use Case**: Triggering one-time actions, querying state, configuration
+
+**Characteristics**:
+- **Synchronous**: Client blocks until server responds
+- **One-to-one**: One client calls one server at a time
+- **Request + Response**: Defined `.srv` files with request and response fields
+- **Timeout**: Client can specify max wait time
+
+**Example Service Flow**:
+```
+Client (Controller)              Server (Gripper)
+    |                                  |
+    |---- Request: close_gripper ---->|
+    |                                  | (gripper closes)
+    |<--- Response: success=True ------|
+    |                                  |
+```
+
+**When to Use Services**:
+- Trigger actions: start/stop recording, reset odometry, calibrate sensor
+- Query state: get current position, check battery level
+- Configuration: set parameters, load map, switch modes
+
+**Service Naming Convention**:
+- Verb-based: `/gripper/close`, `/camera/calibrate`, `/map_server/load_map`
+- Namespace per node: `/node_name/service_name`
+
+**Service vs. Topic**:
+- Use **services** for infrequent requests that need confirmation
+- Use **topics** for continuous data streams
+
+**Example**: Robot gripper:
+- **Topic** `/gripper/state` (continuous state updates)
+- **Service** `/gripper/close` (one-time command with success/failure response)
+
+---
+
+#### 1.2.3 Actions (Goal-Feedback-Result)
+
+**Pattern**: Asynchronous, goal-oriented tasks with feedback and cancellation
+
+**Use Case**: Long-running tasks that need progress updates and early termination
+
+**Characteristics**:
+- **Asynchronous**: Client sends goal, continues execution (non-blocking)
+- **Feedback**: Server sends periodic progress updates during execution
+- **Cancellable**: Client can request goal cancellation mid-execution
+- **Result**: Server sends final result when goal completes or is cancelled
+- **Three message types**: Goal (request), Feedback (periodic), Result (final)
+
+**Example Action Flow**:
+```
+Client (Navigation)          Server (Motion Planner)
+    |                               |
+    |---- Goal: move to (5, 3) --->|
+    |                               | (starts moving)
+    |<--- Feedback: 25% complete --|
+    |<--- Feedback: 50% complete --|
+    |<--- Feedback: 75% complete --|
+    |                               | (reaches goal)
+    |<--- Result: success ----------|
+    |                               |
+
+Or with cancellation:
+    |---- Goal: move to (5, 3) --->|
+    |<--- Feedback: 25% complete --|
+    |---- Cancel goal ------------->|
+    |<--- Result: cancelled --------|
+```
+
+**When to Use Actions**:
+- Navigation: "Move to waypoint (x, y)" with periodic distance-to-goal feedback
+- Manipulation: "Grasp object" with gripper force feedback
+- Long computations: "Plan trajectory" with planning progress feedback
+
+**Action vs. Service**:
+- Use **actions** for tasks > 0.5 seconds that need progress monitoring
+- Use **services** for quick requests (< 0.5s) without progress updates
+
+**Action Naming Convention**:
+- Verb-based: `/navigate_to_pose`, `/grasp_object`, `/plan_path`
+- Use `action` suffix if ambiguous: `/move_base_action`
+
+---
+
+### 1.3 DDS Middleware Layer
+
+**DDS (Data Distribution Service)** is an OMG (Object Management Group) standard for real-time, distributed pub-sub communication. ROS 2 uses DDS as its middleware layer.
+
+#### 1.3.1 Why DDS?
+
+**Advantages**:
+1. **Industry standard**: Used in aerospace, defense, automotive (proven reliability)
+2. **Discovery**: Automatic node discovery without master (multicast UDP)
+3. **QoS policies**: Fine-grained control (reliability, latency, bandwidth)
+4. **Real-time**: Deterministic, low-latency communication
+5. **Security**: Built-in encryption (DTLS), authentication, access control
+
+**DDS Implementations** (ROS 2 supports multiple via rmw abstraction):
+- **Fast DDS** (eProsima): Default in ROS 2 Humble, feature-rich, good performance
+- **CycloneDDS** (Eclipse): Lightweight, excellent performance, used in automotive
+- **Connext DDS** (RTI): Commercial, highest reliability, aerospace/defense
+
+**Switching DDS** (environment variable):
+```bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp  # Use CycloneDDS
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp    # Use Fast DDS (default)
+```
+
+#### 1.3.2 Discovery Mechanism
+
+**No Master Node**: Unlike ROS 1, ROS 2 nodes discover each other automatically.
+
+**Discovery Process** (multicast UDP):
+1. Node starts, announces itself via multicast (address 239.255.0.1)
+2. Other nodes receive announcement, respond with their own info
+3. Nodes establish peer-to-peer connections (UDP or shared memory)
+4. Communication begins directly between nodes
+
+**Benefits**:
+- **No single point of failure**: Nodes continue if one dies
+- **Dynamic**: Nodes can join/leave at runtime
+- **Scalable**: Works across multiple machines (same LAN or VPN)
+
+**Discovery Troubleshooting**:
+- **Firewall**: Ensure UDP multicast (239.255.0.1) allowed
+- **Network**: Nodes on different subnets may not discover (use ROS_DOMAIN_ID)
+- **Domain ID**: Set `ROS_DOMAIN_ID=<0-101>` to isolate robot fleets
+
+---
+
+### 1.4 When to Use Topics vs. Services vs. Actions
+
+**Decision Tree**:
+
+```
+Does the task require a response?
+├─ NO → Use TOPIC
+│   └─ Example: Publishing sensor data (/scan, /camera/image)
+│
+└─ YES → Does the task take > 0.5 seconds?
+    ├─ NO → Use SERVICE
+    │   └─ Example: Trigger calibration, query state
+    │
+    └─ YES → Do you need progress feedback or cancellation?
+        ├─ NO → Use SERVICE (if short) or ACTION (if long but no feedback needed)
+        │   └─ Example: Load map file (quick query)
+        │
+        └─ YES → Use ACTION
+            └─ Example: Navigate to waypoint, plan trajectory, grasp object
+```
+
+**Real-World Example**: Autonomous delivery robot
+
+| Task | Communication Type | Rationale |
+|------|-------------------|-----------|
+| Publish camera images | **Topic** `/camera/image` | Continuous stream, no response needed |
+| Publish odometry | **Topic** `/odom` | Continuous state, multiple subscribers |
+| Send velocity commands | **Topic** `/cmd_vel` | Continuous control, low latency |
+| Reset localization | **Service** `/reset_odom` | One-time trigger, need success confirmation |
+| Query battery level | **Service** `/get_battery` | Infrequent query, need current value |
+| Navigate to waypoint | **Action** `/navigate_to_pose` | Long task (10s-5min), need progress, can cancel |
+| Pick up package | **Action** `/grasp_object` | Multi-step task, need force feedback, can fail |
+
+---
+
+## Part 2: Hands-On Implementation (Practice)
+
+### 2.1 Installing ROS 2 Humble
+
+**ROS 2 Humble Hawksbill** is the Long-Term Support (LTS) release (2022-2027), recommended for production.
+
+#### 2.1.1 Ubuntu 22.04 Installation (Recommended)
+
+**Prerequisites**:
+```bash
+# Ensure Ubuntu 22.04 (Jammy Jellyfish)
+lsb_release -a  # Should show Ubuntu 22.04
+
+# Set locale (UTF-8 required)
+sudo apt update && sudo apt install locales
+sudo locale-gen en_US en_US.UTF-8
+sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+export LANG=en_US.UTF-8
+```
+
+**Setup Sources**:
+```bash
+# Add ROS 2 GPG key
+sudo apt install software-properties-common
+sudo add-apt-repository universe
+sudo apt update && sudo apt install curl -y
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+
+# Add repository to sources list
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+```
+
+**Install ROS 2 Humble**:
+```bash
+# Update apt cache
+sudo apt update
+sudo apt upgrade
+
+# Install desktop full (recommended: includes RViz, rqt, demos)
+sudo apt install ros-humble-desktop -y
+
+# Or install base (minimal, no GUI tools)
+# sudo apt install ros-humble-ros-base -y
+
+# Install development tools
+sudo apt install ros-dev-tools -y
+```
+
+**Setup Environment**:
+```bash
+# Source ROS 2 setup (add to ~/.bashrc for persistence)
+source /opt/ros/humble/setup.bash
+
+# Verify installation
+ros2 --help  # Should show ROS 2 command-line help
+
+# Check version
+ros2 doctor  # Checks system configuration
+```
+
+**Automatic Sourcing** (add to `~/.bashrc`):
+```bash
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### 2.1.2 Verification
+
+**Test 1: Run Talker-Listener Demo**
+
+Terminal 1 (talker):
+```bash
+ros2 run demo_nodes_cpp talker
+```
+
+Terminal 2 (listener):
+```bash
+ros2 run demo_nodes_py listener
+```
+
+Expected output (Terminal 1):
+```
+[INFO] [talker]: Publishing: 'Hello World: 1'
+[INFO] [talker]: Publishing: 'Hello World: 2'
+```
+
+Expected output (Terminal 2):
+```
+[INFO] [listener]: I heard: [Hello World: 1]
+[INFO] [listener]: I heard: [Hello World: 2]
+```
+
+**Test 2: Check Topics**
+```bash
+ros2 topic list  # Should show /chatter, /parameter_events, /rosout
+ros2 topic echo /chatter  # Should show published messages
+```
+
+**Test 3: Visualize Node Graph**
+```bash
+rqt_graph  # Opens GUI showing talker → /chatter → listener
+```
+
+#### 2.1.3 Common Installation Errors
+
+**Error 1**: `bash: ros2: command not found`
+- **Cause**: ROS 2 not sourced
+- **Fix**: `source /opt/ros/humble/setup.bash` (add to `~/.bashrc`)
+
+**Error 2**: `E: Unable to locate package ros-humble-desktop`
+- **Cause**: Repository not added correctly
+- **Fix**: Re-run "Setup Sources" step, ensure GPG key added
+
+**Error 3**: `locale: Cannot set LC_ALL to default locale: No such file or directory`
+- **Cause**: UTF-8 locale not configured
+- **Fix**: `sudo locale-gen en_US.UTF-8 && sudo update-locale`
+
+**Error 4**: Discovery issues (nodes don't see each other)
+- **Cause**: Firewall blocking multicast UDP
+- **Fix**: `sudo ufw allow from 224.0.0.0/4` (allow multicast)
+
+---
+
+### 2.2 Creating Your First ROS 2 Package
+
+#### 2.2.1 Workspace Setup
+
+**ROS 2 uses colcon** (COLlaborative CONstruction) build system.
+
+```bash
+# Create workspace
+mkdir -p ~/ros2_ws/src
+cd ~/ros2_ws/src
+
+# Create Python package
+ros2 pkg create --build-type ament_python py_pubsub --dependencies rclpy std_msgs
+
+# Package structure
+# py_pubsub/
+# ├── package.xml          # Package metadata (dependencies, version)
+# ├── setup.py             # Python package setup (entry points)
+# ├── setup.cfg            # Configuration
+# ├── py_pubsub/
+# │   └── __init__.py      # Python module
+# └── resource/
+#     └── py_pubsub        # Empty marker file
+```
+
+**Build Workspace**:
+```bash
+cd ~/ros2_ws
+colcon build --symlink-install  # --symlink-install: no rebuild for Python changes
+
+# Source workspace
+source install/setup.bash
+```
+
+---
+
+### 2.3 Practice Example 1: Publisher-Subscriber (Topic Communication)
+
+#### Overview
+Create a temperature sensor simulator (publisher) and monitor (subscriber).
+
+Create file: `~/ros2_ws/src/py_pubsub/py_pubsub/temperature_publisher.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Temperature Sensor Publisher
+Chapter 3: ROS 2 Fundamentals
+Physical AI and Humanoid Robotics Textbook
+
+Simulates a temperature sensor publishing readings at 1 Hz.
+"""
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float32
+import random
+
+
+class TemperaturePublisher(Node):
+    def __init__(self):
+        super().__init__('temperature_publisher')
+
+        # Create publisher: topic '/temperature', message type Float32, queue size 10
+        self.publisher_ = self.create_publisher(Float32, 'temperature', 10)
+
+        # Create timer: callback every 1.0 seconds
+        self.timer = self.create_timer(1.0, self.timer_callback)
+
+        # Internal state
+        self.base_temp = 22.0  # Base temperature (°C)
+        self.count = 0
+
+        self.get_logger().info('Temperature publisher started')
+
+    def timer_callback(self):
+        """Publish temperature reading every second."""
+        # Simulate noisy sensor: base temp + random noise
+        temperature = self.base_temp + random.uniform(-2.0, 2.0)
+
+        # Create message
+        msg = Float32()
+        msg.data = temperature
+
+        # Publish
+        self.publisher_.publish(msg)
+
+        self.get_logger().info(f'Publishing: {temperature:.2f}°C')
+        self.count += 1
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = TemperaturePublisher()
+
+    try:
+        rclpy.spin(node)  # Keep node running until Ctrl+C
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+Create file: `~/ros2_ws/src/py_pubsub/py_pubsub/temperature_subscriber.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Temperature Monitor Subscriber
+Chapter 3: ROS 2 Fundamentals
+Physical AI and Humanoid Robotics Textbook
+
+Monitors temperature and triggers alerts if thresholds exceeded.
+"""
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float32
+
+
+class TemperatureSubscriber(Node):
+    def __init__(self):
+        super().__init__('temperature_subscriber')
+
+        # Create subscriber: topic '/temperature', message type Float32
+        self.subscription = self.create_subscription(
+            Float32,
+            'temperature',
+            self.listener_callback,
+            10  # QoS queue size
+        )
+
+        # Thresholds
+        self.warning_threshold = 25.0  # °C
+        self.critical_threshold = 28.0  # °C
+
+        self.get_logger().info('Temperature monitor started')
+        self.get_logger().info(f'Warning threshold: {self.warning_threshold}°C')
+        self.get_logger().info(f'Critical threshold: {self.critical_threshold}°C')
+
+    def listener_callback(self, msg):
+        """Called whenever a message is received on /temperature topic."""
+        temperature = msg.data
+
+        # Check thresholds
+        if temperature >= self.critical_threshold:
+            self.get_logger().error(f'CRITICAL: Temperature {temperature:.2f}°C!')
+        elif temperature >= self.warning_threshold:
+            self.get_logger().warn(f'WARNING: Temperature {temperature:.2f}°C')
+        else:
+            self.get_logger().info(f'Temperature OK: {temperature:.2f}°C')
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = TemperatureSubscriber()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+#### Setup Entry Points
+
+Edit `~/ros2_ws/src/py_pubsub/setup.py`:
+
+```python
+from setuptools import setup
+
+package_name = 'py_pubsub'
+
+setup(
+    name=package_name,
+    version='0.0.1',
+    packages=[package_name],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='Your Name',
+    maintainer_email='your.email@example.com',
+    description='Temperature sensor pub-sub example',
+    license='Apache License 2.0',
+    tests_require=['pytest'],
+    entry_points={
+        'console_scripts': [
+            'temperature_publisher = py_pubsub.temperature_publisher:main',
+            'temperature_subscriber = py_pubsub.temperature_subscriber:main',
+        ],
+    },
+)
+```
+
+#### Build and Run
+
+```bash
+# Build package
+cd ~/ros2_ws
+colcon build --packages-select py_pubsub --symlink-install
+source install/setup.bash
+
+# Terminal 1: Run publisher
+ros2 run py_pubsub temperature_publisher
+
+# Terminal 2: Run subscriber
+ros2 run py_pubsub temperature_subscriber
+
+# Terminal 3: Inspect topic
+ros2 topic list  # Should show /temperature
+ros2 topic info /temperature  # Shows publishers/subscribers
+ros2 topic hz /temperature  # Shows publish rate (should be ~1 Hz)
+ros2 topic echo /temperature  # Prints messages
+```
+
+**Expected Output** (Terminal 2):
+```
+[INFO] [temperature_subscriber]: Temperature OK: 21.34°C
+[INFO] [temperature_subscriber]: Temperature OK: 23.12°C
+[WARN] [temperature_subscriber]: WARNING: Temperature 25.67°C
+[ERROR] [temperature_subscriber]: CRITICAL: Temperature 28.45°C!
+```
+
+#### Key Concepts Demonstrated
+
+1. **Node Class Inheritance**: Extend `rclpy.node.Node`
+2. **Publisher Creation**: `self.create_publisher(msg_type, topic, qos_depth)`
+3. **Subscriber Creation**: `self.create_subscription(msg_type, topic, callback, qos_depth)`
+4. **Timer Callbacks**: `self.create_timer(period, callback)` for periodic publishing
+5. **Message Types**: `std_msgs.msg.Float32` (built-in message)
+6. **Logging**: `self.get_logger().info/warn/error()`
+
+---
+
+### 2.4 Practice Example 2: Service (Request-Response)
+
+#### Overview
+Create a simple calculator service that adds two integers.
+
+Create file: `~/ros2_ws/src/py_pubsub/py_pubsub/add_two_ints_server.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Add Two Integers Service Server
+Chapter 3: ROS 2 Fundamentals
+Physical AI and Humanoid Robotics Textbook
+
+Provides a service to add two integers.
+"""
+
+import rclpy
+from rclpy.node import Node
+from example_interfaces.srv import AddTwoInts
+
+
+class AddTwoIntsServer(Node):
+    def __init__(self):
+        super().__init__('add_two_ints_server')
+
+        # Create service: name '/add_two_ints', type AddTwoInts, callback
+        self.srv = self.create_service(
+            AddTwoInts,
+            'add_two_ints',
+            self.add_two_ints_callback
+        )
+
+        self.get_logger().info('Add two ints server ready')
+
+    def add_two_ints_callback(self, request, response):
+        """
+        Service callback: receives request, returns response.
+
+        Args:
+            request: AddTwoInts.Request with fields .a and .b (int64)
+            response: AddTwoInts.Response with field .sum (int64)
+
+        Returns:
+            response: Populated response object
+        """
+        response.sum = request.a + request.b
+        self.get_logger().info(f'Request: {request.a} + {request.b} = {response.sum}')
+        return response
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = AddTwoIntsServer()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+Create file: `~/ros2_ws/src/py_pubsub/py_pubsub/add_two_ints_client.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Add Two Integers Service Client
+Chapter 3: ROS 2 Fundamentals
+Physical AI and Humanoid Robotics Textbook
+
+Calls the add_two_ints service with user-provided integers.
+"""
+
+import sys
+import rclpy
+from rclpy.node import Node
+from example_interfaces.srv import AddTwoInts
+
+
+class AddTwoIntsClient(Node):
+    def __init__(self):
+        super().__init__('add_two_ints_client')
+
+        # Create client: service name '/add_two_ints', type AddTwoInts
+        self.cli = self.create_client(AddTwoInts, 'add_two_ints')
+
+        # Wait for service to be available
+        while not self.cli.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Service not available, waiting...')
+
+        self.req = AddTwoInts.Request()
+
+    def send_request(self, a, b):
+        """
+        Send service request asynchronously.
+
+        Args:
+            a, b: Integers to add
+
+        Returns:
+            future: Future object that will contain response when ready
+        """
+        self.req.a = a
+        self.req.b = b
+
+        self.get_logger().info(f'Sending request: {a} + {b}')
+        return self.cli.call_async(self.req)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+
+    # Parse command-line arguments
+    if len(sys.argv) != 3:
+        print('Usage: ros2 run py_pubsub add_two_ints_client <a> <b>')
+        return
+
+    try:
+        a = int(sys.argv[1])
+        b = int(sys.argv[2])
+    except ValueError:
+        print('Arguments must be integers')
+        return
+
+    # Create client and send request
+    client = AddTwoIntsClient()
+    future = client.send_request(a, b)
+
+    # Wait for response
+    rclpy.spin_until_future_complete(client, future)
+
+    # Get result
+    try:
+        response = future.result()
+        client.get_logger().info(f'Result: {a} + {b} = {response.sum}')
+    except Exception as e:
+        client.get_logger().error(f'Service call failed: {e}')
+    finally:
+        client.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+#### Update Entry Points
+
+Edit `setup.py`, add to `entry_points`:
+
+```python
+entry_points={
+    'console_scripts': [
+        'temperature_publisher = py_pubsub.temperature_publisher:main',
+        'temperature_subscriber = py_pubsub.temperature_subscriber:main',
+        'add_two_ints_server = py_pubsub.add_two_ints_server:main',
+        'add_two_ints_client = py_pubsub.add_two_ints_client:main',
+    ],
+},
+```
+
+#### Build and Run
+
+```bash
+# Build
+cd ~/ros2_ws
+colcon build --packages-select py_pubsub --symlink-install
+source install/setup.bash
+
+# Terminal 1: Run server
+ros2 run py_pubsub add_two_ints_server
+
+# Terminal 2: Call service
+ros2 run py_pubsub add_two_ints_client 5 7
+
+# Or use command line
+ros2 service call /add_two_ints example_interfaces/srv/AddTwoInts "{a: 10, b: 20}"
+```
+
+**Expected Output** (Terminal 1 - Server):
+```
+[INFO] [add_two_ints_server]: Add two ints server ready
+[INFO] [add_two_ints_server]: Request: 5 + 7 = 12
+```
+
+**Expected Output** (Terminal 2 - Client):
+```
+[INFO] [add_two_ints_client]: Sending request: 5 + 7
+[INFO] [add_two_ints_client]: Result: 5 + 7 = 12
+```
+
+#### Key Concepts Demonstrated
+
+1. **Service Server**: `self.create_service(srv_type, service_name, callback)`
+2. **Service Client**: `self.create_client(srv_type, service_name)`
+3. **Synchronous Call**: `self.cli.call_async(request)` returns Future
+4. **Wait for Service**: `self.cli.wait_for_service(timeout_sec)`
+5. **Service Message Types**: `.srv` files with Request and Response fields
+6. **Command-Line Service Call**: `ros2 service call` for testing
+
+---
+
+### 2.5 Practice Example 3: Action (Goal-Feedback-Result)
+
+#### Overview
+Create a Fibonacci sequence action: client requests N numbers, server computes sequence with feedback.
+
+**Note**: Actions require custom interfaces. For simplicity, we'll use `example_interfaces` action.
+
+Create file: `~/ros2_ws/src/py_pubsub/py_pubsub/fibonacci_action_server.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Fibonacci Action Server
+Chapter 3: ROS 2 Fundamentals
+Physical AI and Humanoid Robotics Textbook
+
+Computes Fibonacci sequence with periodic feedback.
+"""
+
+import time
+import rclpy
+from rclpy.action import ActionServer
+from rclpy.node import Node
+from action_tutorials_interfaces.action import Fibonacci
+
+
+class FibonacciActionServer(Node):
+    def __init__(self):
+        super().__init__('fibonacci_action_server')
+
+        # Create action server
+        self._action_server = ActionServer(
+            self,
+            Fibonacci,
+            'fibonacci',
+            self.execute_callback
+        )
+
+        self.get_logger().info('Fibonacci action server ready')
+
+    def execute_callback(self, goal_handle):
+        """
+        Execute action goal: compute Fibonacci sequence.
+
+        Args:
+            goal_handle: Handle to the goal (contains request, can send feedback/result)
+
+        Returns:
+            result: Fibonacci.Result with final sequence
+        """
+        self.get_logger().info(f'Executing goal: compute {goal_handle.request.order} Fibonacci numbers')
+
+        # Initialize feedback message
+        feedback_msg = Fibonacci.Feedback()
+        feedback_msg.partial_sequence = [0, 1]
+
+        # Compute Fibonacci sequence
+        for i in range(1, goal_handle.request.order):
+            # Check if goal was cancelled
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                self.get_logger().info('Goal cancelled')
+                return Fibonacci.Result()
+
+            # Compute next number
+            feedback_msg.partial_sequence.append(
+                feedback_msg.partial_sequence[i] + feedback_msg.partial_sequence[i - 1]
+            )
+
+            # Send feedback
+            self.get_logger().info(f'Feedback: {feedback_msg.partial_sequence}')
+            goal_handle.publish_feedback(feedback_msg)
+
+            time.sleep(0.5)  # Simulate computation time
+
+        # Mark goal as succeeded
+        goal_handle.succeed()
+
+        # Return result
+        result = Fibonacci.Result()
+        result.sequence = feedback_msg.partial_sequence
+        self.get_logger().info(f'Goal succeeded! Final: {result.sequence}')
+        return result
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = FibonacciActionServer()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+Create file: `~/ros2_ws/src/py_pubsub/py_pubsub/fibonacci_action_client.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Fibonacci Action Client
+Chapter 3: ROS 2 Fundamentals
+Physical AI and Humanoid Robotics Textbook
+
+Sends Fibonacci goal and monitors feedback.
+"""
+
+import sys
+import rclpy
+from rclpy.action import ActionClient
+from rclpy.node import Node
+from action_tutorials_interfaces.action import Fibonacci
+
+
+class FibonacciActionClient(Node):
+    def __init__(self):
+        super().__init__('fibonacci_action_client')
+
+        # Create action client
+        self._action_client = ActionClient(self, Fibonacci, 'fibonacci')
+
+    def send_goal(self, order):
+        """Send Fibonacci goal."""
+        self.get_logger().info(f'Waiting for action server...')
+        self._action_client.wait_for_server()
+
+        # Create goal message
+        goal_msg = Fibonacci.Goal()
+        goal_msg.order = order
+
+        self.get_logger().info(f'Sending goal: compute {order} Fibonacci numbers')
+
+        # Send goal asynchronously
+        self._send_goal_future = self._action_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.feedback_callback
+        )
+
+        self._send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def goal_response_callback(self, future):
+        """Called when goal is accepted or rejected."""
+        goal_handle = future.result()
+
+        if not goal_handle.accepted:
+            self.get_logger().info('Goal rejected')
+            return
+
+        self.get_logger().info('Goal accepted')
+
+        # Get result asynchronously
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(self.get_result_callback)
+
+    def get_result_callback(self, future):
+        """Called when action completes."""
+        result = future.result().result
+        self.get_logger().info(f'Result: {result.sequence}')
+        rclpy.shutdown()
+
+    def feedback_callback(self, feedback_msg):
+        """Called periodically with feedback."""
+        feedback = feedback_msg.feedback
+        self.get_logger().info(f'Feedback: {feedback.partial_sequence}')
+
+
+def main(args=None):
+    rclpy.init(args=args)
+
+    # Parse order from command line
+    if len(sys.argv) != 2:
+        print('Usage: ros2 run py_pubsub fibonacci_action_client <order>')
+        return
+
+    try:
+        order = int(sys.argv[1])
+    except ValueError:
+        print('Order must be an integer')
+        return
+
+    # Send goal
+    action_client = FibonacciActionClient()
+    action_client.send_goal(order)
+
+    rclpy.spin(action_client)
+
+
+if __name__ == '__main__':
+    main()
+```
+
+#### Install Dependencies
+
+```bash
+# Install action_tutorials_interfaces package
+sudo apt install ros-humble-action-tutorials-interfaces
+```
+
+#### Update Entry Points
+
+Edit `setup.py`, add to `entry_points`:
+
+```python
+entry_points={
+    'console_scripts': [
+        # ... (previous entries)
+        'fibonacci_action_server = py_pubsub.fibonacci_action_server:main',
+        'fibonacci_action_client = py_pubsub.fibonacci_action_client:main',
+    ],
+},
+```
+
+#### Build and Run
+
+```bash
+# Build
+cd ~/ros2_ws
+colcon build --packages-select py_pubsub --symlink-install
+source install/setup.bash
+
+# Terminal 1: Run action server
+ros2 run py_pubsub fibonacci_action_server
+
+# Terminal 2: Send goal
+ros2 run py_pubsub fibonacci_action_client 10
+
+# Or use command line
+ros2 action send_goal /fibonacci action_tutorials_interfaces/action/Fibonacci "{order: 5}"
+```
+
+**Expected Output** (Terminal 1 - Server):
+```
+[INFO] [fibonacci_action_server]: Fibonacci action server ready
+[INFO] [fibonacci_action_server]: Executing goal: compute 10 Fibonacci numbers
+[INFO] [fibonacci_action_server]: Feedback: [0, 1, 1]
+[INFO] [fibonacci_action_server]: Feedback: [0, 1, 1, 2]
+...
+[INFO] [fibonacci_action_server]: Goal succeeded! Final: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+```
+
+**Expected Output** (Terminal 2 - Client):
+```
+[INFO] [fibonacci_action_client]: Waiting for action server...
+[INFO] [fibonacci_action_client]: Sending goal: compute 10 Fibonacci numbers
+[INFO] [fibonacci_action_client]: Goal accepted
+[INFO] [fibonacci_action_client]: Feedback: [0, 1, 1]
+[INFO] [fibonacci_action_client]: Feedback: [0, 1, 1, 2]
+...
+[INFO] [fibonacci_action_client]: Result: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+```
+
+#### Key Concepts Demonstrated
+
+1. **Action Server**: `ActionServer(node, action_type, action_name, execute_callback)`
+2. **Action Client**: `ActionClient(node, action_type, action_name)`
+3. **Goal Handling**: `goal_handle.succeed()`, `goal_handle.canceled()`
+4. **Feedback**: `goal_handle.publish_feedback(feedback_msg)` for progress updates
+5. **Asynchronous Pattern**: Callbacks for goal response, feedback, and result
+6. **Cancellation**: `goal_handle.is_cancel_requested` to check if client cancelled
+
+---
+
+### 2.6 ROS 2 Command-Line Tools
+
+**Essential CLI Commands**:
+
+```bash
+# Node commands
+ros2 node list                     # List running nodes
+ros2 node info /node_name          # Show node details (topics, services, actions)
+
+# Topic commands
+ros2 topic list                    # List all topics
+ros2 topic info /topic_name        # Show publishers/subscribers
+ros2 topic echo /topic_name        # Print messages in real-time
+ros2 topic hz /topic_name          # Measure publish rate
+ros2 topic pub /topic_name <type> "<data>"  # Manually publish message
+
+# Service commands
+ros2 service list                  # List all services
+ros2 service type /service_name    # Show service message type
+ros2 service call /service_name <type> "<request>"  # Call service
+
+# Action commands
+ros2 action list                   # List all actions
+ros2 action info /action_name      # Show action clients/servers
+ros2 action send_goal /action_name <type> "<goal>"  # Send action goal
+
+# Parameter commands
+ros2 param list                    # List parameters for all nodes
+ros2 param get /node_name param_name  # Get parameter value
+ros2 param set /node_name param_name value  # Set parameter value
+
+# Interface commands (message/service/action definitions)
+ros2 interface list                # List all interfaces
+ros2 interface show <type>         # Show interface definition
+ros2 interface package <pkg>       # List interfaces in package
+
+# Launch commands
+ros2 launch <package> <launch_file>  # Launch multiple nodes from launch file
+
+# Bag commands (record/replay data)
+ros2 bag record /topic1 /topic2    # Record topics to bag file
+ros2 bag play <bag_file>           # Replay recorded data
+
+# Doctor (system check)
+ros2 doctor                        # Check ROS 2 setup and configuration
+```
+
+---
+
+## Part 3: Optional Hardware Deployment
+
+### 3.1 Running ROS 2 on Embedded Hardware
+
+**Supported Platforms**:
+- **NVIDIA Jetson** (Nano, Xavier NX, Orin): Ubuntu 20.04/22.04, ARM64
+- **Raspberry Pi 4/5**: Ubuntu 22.04, ARM64
+- **Intel NUC**: Ubuntu 22.04, x86_64
+
+**Installation on Jetson/Pi** (same as desktop):
+```bash
+# On Ubuntu 22.04 ARM64
+sudo apt update
+sudo apt install ros-humble-ros-base  # Minimal install (no GUI tools)
+sudo apt install python3-colcon-common-extensions
+```
+
+**Performance Considerations**:
+- **Jetson Nano** (4GB): Can run 5-10 nodes, limited compute for vision
+- **Jetson Xavier NX** (8GB): Can run 20+ nodes, GPU acceleration for AI
+- **Raspberry Pi 4** (8GB): Can run 10-15 nodes, no GPU (CPU-only inference)
+
+### 3.2 Network Configuration for Multi-Machine ROS 2
+
+**Scenario**: Robot computer (Jetson) + laptop for visualization (RViz)
+
+**Requirements**:
+1. **Same network**: Both machines on same LAN (or VPN)
+2. **Multicast enabled**: Firewall allows UDP multicast (239.255.0.1)
+3. **Same ROS_DOMAIN_ID**: Isolates ROS 2 networks (0-101)
+
+**Setup**:
+
+On robot (Jetson):
+```bash
+export ROS_DOMAIN_ID=42  # Choose domain ID
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp  # Optional: use CycloneDDS
+
+ros2 run my_robot sensor_node
+```
+
+On laptop:
+```bash
+export ROS_DOMAIN_ID=42  # MUST match robot
+ros2 topic list  # Should see robot's topics
+rviz2  # Visualize robot data
+```
+
+**Troubleshooting**:
+- **Can't see topics**: Check firewall (`sudo ufw allow from 224.0.0.0/4`), ensure same domain ID
+- **High latency**: Use wired Ethernet instead of Wi-Fi
+- **Bandwidth issues**: Compress images (`image_transport` with JPEG/PNG)
+
+### 3.3 Docker Deployment
+
+For non-Ubuntu platforms or isolated environments:
+
+```dockerfile
+FROM ros:humble
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    ros-humble-demo-nodes-py
+
+# Copy workspace
+COPY ros2_ws /root/ros2_ws
+
+# Build workspace
+WORKDIR /root/ros2_ws
+RUN . /opt/ros/humble/setup.sh && colcon build
+
+# Source workspace on container start
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
+RUN echo "source /root/ros2_ws/install/setup.bash" >> /root/.bashrc
+
+CMD ["/bin/bash"]
+```
+
+---
+
+## Review Questions
+
+**Question 1** (Conceptual): Explain the key difference between ROS 1 and ROS 2 architecture. Why does ROS 2 not require a master node?
+
+**Question 2** (Pattern Selection): You're building a robot arm controller. For each task, choose the appropriate communication pattern (topic, service, or action) and justify:
+- a) Streaming joint position commands at 100 Hz
+- b) Requesting the current gripper state (open/closed)
+- c) Moving the arm to a target pose (takes 3-5 seconds)
+
+**Question 3** (QoS): A camera publishes images at 30 FPS. Should you use **Best Effort** or **Reliable** QoS? What happens if you choose the wrong one?
+
+**Question 4** (Debugging): You run `ros2 topic list` and don't see the topic your node is publishing. List 3 possible causes and how to diagnose each.
+
+**Question 5** (DDS Discovery): Two robots are on the same Wi-Fi network but can't see each other's topics. They both have `ROS_DOMAIN_ID=0`. What could be wrong?
+
+---
+
+## Hands-On Exercises
+
+### Exercise 1: Custom Message Type
+
+**Task**: Create a custom message for a robot pose (position + orientation) and publish/subscribe to it.
+
+**Steps**:
+1. Create message interface package:
+   ```bash
+   ros2 pkg create --build-type ament_cmake my_robot_interfaces
+   ```
+
+2. Define message in `msg/RobotPose.msg`:
+   ```
+   float64 x
+   float64 y
+   float64 z
+   float64 roll
+   float64 pitch
+   float64 yaw
+   ```
+
+3. Update `CMakeLists.txt` and `package.xml` (see ROS 2 docs)
+
+4. Build and use in publisher/subscriber
+
+**Solution Guidance**: See ROS 2 tutorial "Creating custom msg files"
+
+---
+
+### Exercise 2: Multi-Node System
+
+**Task**: Create a simple robot simulation with 3 nodes:
+1. **Sensor node**: Publishes simulated distance sensor readings (topic `/distance`)
+2. **Controller node**: Subscribes to `/distance`, publishes velocity commands (topic `/cmd_vel`)
+3. **Robot node**: Subscribes to `/cmd_vel`, simulates motion, publishes odometry (topic `/odom`)
+
+**Solution Guidance**:
+- Use `std_msgs/Float32` for `/distance` and `/cmd_vel`
+- Use `nav_msgs/Odometry` for `/odom`
+- Controller logic: if distance < 1.0m, send velocity 0.0 (stop); else send 0.5 m/s (forward)
+
+---
+
+### Exercise 3: Launch File
+
+**Task**: Create a launch file to start all nodes from Exercise 2 simultaneously.
+
+**Solution Guidance** (`~/ros2_ws/src/py_pubsub/launch/robot_sim.launch.py`):
+
+```python
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(
+            package='py_pubsub',
+            executable='sensor_node',
+            name='sensor'
+        ),
+        Node(
+            package='py_pubsub',
+            executable='controller_node',
+            name='controller'
+        ),
+        Node(
+            package='py_pubsub',
+            executable='robot_node',
+            name='robot'
+        ),
+    ])
+```
+
+Run with: `ros2 launch py_pubsub robot_sim.launch.py`
+
+---
+
+## Key Takeaways
+
+1. **ROS 2 is middleware**: Not an OS, but a framework for distributed robot software with standardized communication patterns.
+
+2. **No master node**: ROS 2 uses DDS for automatic peer-to-peer discovery, eliminating single point of failure.
+
+3. **Three communication patterns**: Topics (streaming), services (request-response), actions (long tasks with feedback) — choose based on task duration and feedback needs.
+
+4. **Quality of Service (QoS)**: Fine-grained control over reliability, latency, and bandwidth trade-offs.
+
+5. **DDS middleware**: Industry-standard pub-sub with real-time support, multiple implementations (Fast DDS, CycloneDDS, Connext).
+
+6. **rclpy for Python**: ROS 2 Python client library for creating nodes, publishers, subscribers, services, actions.
+
+7. **Colcon build system**: COLlaborative CONstruction tool for building ROS 2 workspaces (replaces catkin from ROS 1).
+
+8. **Command-line tools**: `ros2 topic/service/action/node` commands for debugging and introspection.
+
+9. **Multi-machine support**: Nodes on different computers automatically discover each other (same LAN, same `ROS_DOMAIN_ID`).
+
+10. **Production-ready**: ROS 2 Humble (LTS) supported until 2027, used in commercial robots (automotive, logistics, service robots).
+
+---
+
+## References
+
+### Foundational Sources (Established)
+
+1. **Quigley, M., et al. (2009).** "ROS: An Open-Source Robot Operating System." *ICRA Workshop on Open Source Software*, 3(3.2), 5. [established]
+   *Original ROS 1 paper introducing pub-sub architecture, nodes, topics, services, and tf (transform library).*
+
+2. **Maruyama, Y., Kato, S., & Azumi, T. (2016).** "Exploring the Performance of ROS2." *Proc. Int. Conf. Embedded Software (EMSOFT)*, 1-10. [https://doi.org/10.1145/2968478.2968502](https://doi.org/10.1145/2968478.2968502) [established]
+   *Early analysis of ROS 2 performance vs. ROS 1, DDS middleware evaluation, real-time capabilities.*
+
+3. **Pardo-Castellote, G. (2003).** "OMG Data-Distribution Service: Architectural Overview." *Proc. IEEE Military Communications Conference (MILCOM)*, 200-206. [https://doi.org/10.1109/MILCOM.2003.1290093](https://doi.org/10.1109/MILCOM.2003.1290093) [established]
+   *DDS standard specification, pub-sub architecture, QoS policies, discovery protocol.*
+
+4. **Macenski, S., Foote, T., Gerkey, B., Lalancette, C., & Woodall, W. (2022).** "Robot Operating System 2: Design, Architecture, and Uses in the Wild." *Science Robotics*, 7(66). [https://doi.org/10.1126/scirobotics.abm6074](https://doi.org/10.1126/scirobotics.abm6074) [established]
+   *Comprehensive ROS 2 design rationale, architecture comparison to ROS 1, case studies in industry and academia.*
+
+### Tool Documentation
+
+5. **ROS 2 Documentation (2025).** *ROS 2 Humble Hawksbill Official Documentation*. [Online]. [https://docs.ros.org/en/humble/](https://docs.ros.org/en/humble/) [tool documentation]
+   *Official tutorials, API reference, concept guides for ROS 2 Humble LTS release.*
+
+6. **rclpy API Documentation (2025).** *ROS 2 Python Client Library Reference*. [Online]. [https://docs.ros2.org/humble/api/rclpy/](https://docs.ros2.org/humble/api/rclpy/) [tool documentation]
+   *Python API for nodes, publishers, subscribers, services, actions, timers, executors.*
+
+7. **Colcon Documentation (2025).** *COLlaborative CONstruction Build Tool*. [Online]. [https://colcon.readthedocs.io/](https://colcon.readthedocs.io/) [tool documentation]
+   *Build system for ROS 2 workspaces, package compilation, workspace management.*
+
+8. **Fast DDS Documentation (2025).** *eProsima Fast DDS User Manual*. [Online]. [https://fast-dds.docs.eprosima.com/](https://fast-dds.docs.eprosima.com/) [tool documentation]
+   *Default DDS implementation in ROS 2 Humble, QoS configuration, performance tuning.*
+
+### Emerging Sources
+
+9. **Open Robotics (2024).** *ROS 2 Iron Irwini Release Notes*. [Online]. [https://docs.ros.org/en/iron/](https://docs.ros.org/en/iron/) [emerging]
+   *Latest ROS 2 release (2023), new features: type negotiation, service introspection, improved lifecycle.*
+
+10. **Nav2 Project (2024).** *Navigation2 Framework Documentation*. [Online]. [https://navigation.ros.org/](https://navigation.ros.org/) [emerging]
+    *Production-grade navigation stack for ROS 2: SLAM, path planning, behavior trees, costmaps.*
+
+11. **MoveIt 2 (2024).** *MoveIt 2 Motion Planning Framework*. [Online]. [https://moveit.ros.org/](https://moveit.ros.org/) [emerging]
+    *Manipulation planning for ROS 2: inverse kinematics, collision detection, pick-and-place.*
+
+12. **ROS 2 Control (2024).** *ros2_control Framework*. [Online]. [https://control.ros.org/](https://control.ros.org/) [emerging]
+    *Real-time controller interface for ROS 2: joint control, hardware abstraction, controller chaining.*
+
+13. **Autoware Foundation (2024).** *Autoware: Open-Source Autonomous Driving Stack*. [Online]. [https://www.autoware.org/](https://www.autoware.org/) [emerging]
+    *ROS 2-based autonomous vehicle software: perception, planning, control (used by Toyota, Tier IV).*
+
+14. **ROS-Industrial Consortium (2024).** *ROS 2 for Industrial Applications*. [Online]. [https://rosindustrial.org/](https://rosindustrial.org/) [emerging]
+    *ROS 2 adoption in manufacturing: industrial robot drivers, real-time control, OPC-UA integration.*
+
+15. **Gazebo (2024).** *Gazebo Simulator for ROS 2*. [Online]. [https://gazebosim.org/](https://gazebosim.org/) [emerging]
+    *Physics-based robot simulation integrated with ROS 2: sensor models, dynamics, rendering (used in Ch 5).*
+
+---
+
+## Answer Key
+
+**Answer 1**: ROS 1 uses a **master-slave architecture** requiring a central `roscore` (ROS Master) for node discovery and parameter server. If roscore crashes, all nodes lose communication. ROS 2 uses **peer-to-peer DDS discovery**: nodes multicast announcements (UDP 239.255.0.1), discover each other automatically, and establish direct connections. No single point of failure — nodes continue even if others crash.
+
+**Answer 2**:
+- a) **Topic** `/joint_commands` — High-frequency streaming (100 Hz), no response needed, low latency required
+- b) **Service** `/get_gripper_state` — One-time query, need current value response, infrequent (< 1 Hz)
+- c) **Action** `/move_to_pose` — Long-running (3-5s), need periodic feedback (distance to goal), can cancel mid-execution
+
+**Answer 3**: Use **Best Effort** for 30 FPS camera. Reasoning: (1) Dropping occasional frames acceptable (human perception ~24 FPS), (2) Low latency critical (real-time visualization/control), (3) Reliable would buffer and retry → latency spikes and memory growth. Wrong choice (Reliable): Queue fills with old images, display lags behind reality.
+
+**Answer 4**: Possible causes:
+1. **Node not sourced**: Run `source ~/ros2_ws/install/setup.bash` (check with `echo $AMENT_PREFIX_PATH`)
+2. **Different ROS_DOMAIN_ID**: Publisher and subscriber have different domain IDs (check with `echo $ROS_DOMAIN_ID`)
+3. **Topic name mismatch**: Typo in topic name, or namespace issue (use `ros2 node info /node_name` to see advertised topics)
+
+**Answer 5**: Firewall is blocking multicast UDP. Wi-Fi networks often disable multicast by default (security/performance). Fix: (1) Use wired Ethernet, (2) Configure router to allow multicast (239.255.0.0/8), (3) Use VPN with multicast support, or (4) Set static DDS peers (advanced).
+
+---
+
+**End of Chapter 3**
+
+**Next Chapter Preview**: Chapter 4 will cover URDF robot modeling, creating robot descriptions, joint state publishers, and visualizing robots in RViz.
+
+---
+
+**Last Updated**: 2025-12-23
+**Tested On**: Ubuntu 22.04, ROS 2 Humble, Python 3.10
